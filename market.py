@@ -42,14 +42,20 @@ Discovery (where tracked tokens come from; every token carries `source` and `fir
     "pumpfun", pair = the curve account) but reports no liquidity for them, so the arena fills in the curve's
     virtual reserves (sqrt(mcap_sol * 32.19) SOL each side, the constant-product the curve really trades on).
     Jupiter routes them (label "Pump.fun"), so sellability probes and fills work unchanged. A launch that later
-    graduates becomes "graduated".
+    graduates becomes "graduated". In the pumpfun universe launches are picked by probation instead: every launch
+    passing the same creator-buy floor waits up to ARENA_PUMPFUN_PROBATION_MIN minutes, up to 120 of them (least
+    recently priced first) are priced on DexScreener each discover cycle (4 requests of 30), and one is tracked
+    as soon as its market cap reaches ARENA_PUMPFUN_TRACK_MCAP_USD or its 1h volume ARENA_PUMPFUN_TRACK_VOL_USD
+    with at least 40 1h transactions; the rest are forgotten. Every curve token carries pump.curve_pct
+    (market cap / the $69,000 graduation cap, 0-100) and every priced token `high` (highest price seen).
   - "copy": force-tracked with LiveMarket.track() (a trader the arena follows just bought it).
   Every token also carries `sources`, the list of every tag it ever matched, in order; `source` is the first one
   (except promoted + organic -> "both", and pumpfun -> graduated).
   When the pool is full (max_tracked), eviction keeps about ARENA_PUMPFUN_SHARE of the slots for pump.fun tokens
-  and splits the rest between organic and promoted by ARENA_ORGANIC_SHARE, dropping first any token DexScreener
-  has not priced for 10 minutes, then the oldest free token of whichever group is furthest over its share (among
-  pump.fun tokens, launches before graduations). Held tokens and tokens protected by track() are never evicted.
+  and splits the rest between organic and promoted by ARENA_ORGANIC_SHARE, dropping first dead tokens (a launch
+  trading at 10% or less of its high, or any token DexScreener has not priced for 10 minutes), then the oldest
+  free token of whichever group is furthest over its share (among pump.fun tokens, launches before graduations).
+  Held tokens and tokens protected by track() are never evicted.
   ARENA_DISCOVERY=both          dexscreener | geckoterminal | both: which discovery feeds to use.
   ARENA_ORGANIC_SHARE=0.5       share of the non-pump.fun slots kept for organic tokens (0 = promoted only,
                                 1 = organic only).
@@ -61,6 +67,14 @@ Discovery (where tracked tokens come from; every token carries `source` and `fir
   ARENA_PUMPFUN_NEW=2           fresh launches tracked per discover cycle (every 120 s), best first.
   ARENA_PUMPFUN_MIN_MCAP_SOL=30 a launch needs at least this initial market cap in SOL (27.96 = nobody bought;
                                 30 means the creator put in about 1 SOL) to be considered.
+  ARENA_UNIVERSE=all            all | pumpfun. pumpfun: only pump.fun tokens (graduations + launches through
+                                probation); promoted and organic discovery are off, ARENA_PUMPFUN_SHARE is forced
+                                to 1, max_tracked defaults to 150 (60 otherwise) and track() refuses mints that
+                                are not pump.fun (do not end in "pump" and carry no pump.fun details).
+  ARENA_PUMPFUN_PROBATION_MIN=20  pumpfun universe: minutes after its launch a launch stays on probation.
+  ARENA_PUMPFUN_TRACK_MCAP_USD=12000  pumpfun universe: market cap in dollars that promotes a launch.
+  ARENA_PUMPFUN_TRACK_VOL_USD=8000    pumpfun universe: 1h volume in dollars that promotes a launch (with at
+                                least 40 1h buys + sells).
 
 Force-tracking: LiveMarket.track(mint, source="copy", hold_secs=21600, held=()) adds a token the feeds have not
 found (no network call; safe under the arena lock), prices it on the next refresh and protects it from eviction
@@ -136,6 +150,20 @@ PUMPFUN_ON = pumpfun is not None and getattr(pumpfun, "ENABLED", False) and geta
 PUMPFUN_SHARE = min(1.0, max(0.0, float(os.environ.get("ARENA_PUMPFUN_SHARE", "0.2") or 0))) if PUMPFUN_ON else 0.0
 PUMPFUN_NEW = max(0, int(float(os.environ.get("ARENA_PUMPFUN_NEW", "2") or 0)))
 PUMPFUN_MIN_MCAP_SOL = float(os.environ.get("ARENA_PUMPFUN_MIN_MCAP_SOL", "30") or 0)
+# universe: "all" (promoted + organic + pump.fun) or "pumpfun" (only PumpPortal launches / graduations)
+UNIVERSE = os.environ.get("ARENA_UNIVERSE", "all").strip().lower()
+if UNIVERSE != "pumpfun":
+    UNIVERSE = "all"
+if UNIVERSE == "pumpfun":
+    PUMPFUN_SHARE = 1.0  # every slot is a pump.fun slot; promoted / organic discovery is off (see _discover)
+    if not PUMPFUN_ON:
+        print("[market] ARENA_UNIVERSE=pumpfun but the pump.fun feed is off: nothing will be discovered")
+PROBATION_MIN = float(os.environ.get("ARENA_PUMPFUN_PROBATION_MIN", "20") or 20)
+TRACK_MCAP_USD = float(os.environ.get("ARENA_PUMPFUN_TRACK_MCAP_USD", "12000") or 0)
+TRACK_VOL_USD = float(os.environ.get("ARENA_PUMPFUN_TRACK_VOL_USD", "8000") or 0)
+TRACK_MIN_TXNS = 40          # 1h buys + sells a launch needs for the volume rule
+PROBATION_PER_CYCLE = 120    # launches priced per discover cycle (4 DexScreener requests of 30)
+GRADUATION_CAP_USD = 69000   # market cap at which a pump.fun curve completes (for curve_pct)
 CURVE_K_SOL = 30.0 * 1.073e9 / 1e9   # pump.fun bonding curve: 30 virtual SOL x 1.073 billion virtual tokens, per token
 CURVE_VIRTUAL_SOL = 30.0
 # eviction groups: a token's group follows its primary source; anything unknown counts as promoted
@@ -230,6 +258,12 @@ def risk_rating(flags, hard=False):
 
 
 def _annotate(t):
+    price = t.get("price") or 0
+    if price > 0:
+        t["high"] = max(t.get("high") or 0, price)  # highest price seen while tracked (dead-launch eviction)
+    if t.get("dex") == "pumpfun" or t.get("source") == "pumpfun":
+        curve_pct = min(100.0, (t.get("mcap") or 0) / GRADUATION_CAP_USD * 100)  # progress toward graduation
+        t.setdefault("pump", {})["curve_pct"] = round(curve_pct, 1)
     t["flags"] = risk_flags(t)
     t["rating"] = risk_rating(t["flags"], hard=any(h for _, h in _rug_flags(t)))
 
@@ -301,9 +335,9 @@ class LiveMarket:
     KEEP = ("first_seen", "risk", "decimals", "sellable", "source", "rug", "rug_checked", "rug_tried")
     # same, but only copied when set (so recordings don't fill up with nulls): every source tag the token
     # matched, eviction protection from track(), the pump.fun launch / graduation details
-    KEEP_IF_SET = ("sources", "protect_until", "tracked_at", "pump")
+    KEEP_IF_SET = ("sources", "protect_until", "tracked_at", "pump", "high")
 
-    def __init__(self, max_tracked=60, discover_every=120, risk_checks_per_refresh=12):
+    def __init__(self, max_tracked=None, discover_every=120, risk_checks_per_refresh=12):
         self.tokens = {}
         # Safety-check results by token address, saved by the arena so restarts don't start blind.
         # Revoked authority can't be restored, so a fully revoked result never goes stale. The same entries
@@ -312,7 +346,7 @@ class LiveMarket:
         self.risk_cache = {}
         self.risk_dirty = False
         self.sol = None
-        self.max_tracked = max_tracked
+        self.max_tracked = max_tracked or (150 if UNIVERSE == "pumpfun" else 60)
         self.discover_every = discover_every
         self.risk_checks = risk_checks_per_refresh
         self.last_discover = 0
@@ -330,6 +364,8 @@ class LiveMarket:
         self.pump_since = {"new": 0.0, "grad": 0.0}  # feed timestamps already consumed
         self.pump_stats = {"graduated": 0, "launches": 0, "launches_seen": 0, "skipped_mcap": 0}
         self._pump_meta = {}            # launch / graduation details for tokens about to be created
+        self.probation = {}             # pumpfun universe: mint -> launch event + first_seen / polled_at
+        self.probation_stats = {"polled": 0, "promoted": 0, "expired": 0}
         self.last_held = set()          # held set from the latest refresh (track() evicts around it)
 
     def _get(self, url):
@@ -350,10 +386,10 @@ class LiveMarket:
         "both", or a list such as ["graduated", "organic"] when the pump.fun feed also names it (first = primary).
         Each feed is independent: one failing never costs the other's results."""
         found = {}
-        if ORGANIC_SHARE < 1:
+        if UNIVERSE != "pumpfun" and ORGANIC_SHARE < 1:
             for a in self._discover_dexscreener():
                 found[a] = "promoted"
-        if ORGANIC_SHARE > 0:
+        if UNIVERSE != "pumpfun" and ORGANIC_SHARE > 0:
             for a in self._discover_gecko():
                 found[a] = "both" if a in found else "organic"
         if PUMPFUN_SHARE > 0:
@@ -369,8 +405,11 @@ class LiveMarket:
     def _discover_pumpfun(self):
         """Address -> "graduated" / "pumpfun" from PumpPortal's free stream (pumpfun.py): every migration since the
         last cycle, plus the PUMPFUN_NEW launches of the last cycle with the largest initial market cap (at least
-        PUMPFUN_MIN_MCAP_SOL). No network call here; the feed's thread fills the buffers."""
+        PUMPFUN_MIN_MCAP_SOL). No network call here; the feed's thread fills the buffers. In the pumpfun universe
+        the launches come from _probation_poll instead (which does price them on DexScreener)."""
         if self.pump is None:
+            if pumpfun is None:
+                return {}
             self.pump = pumpfun.shared()
             if self.pump is None:
                 return {}
@@ -391,6 +430,11 @@ class LiveMarket:
                 else:
                     self._pump_meta[a] = {"graduated": g["ts"]}
         self.pump_stats["graduated"] += sum(1 for a in found if a not in self.tokens)
+        if UNIVERSE == "pumpfun":
+            for a, src in self._probation_poll(now).items():
+                found.setdefault(a, src)
+            self._prune_pump_meta(found)
+            return found
         launches = self.pump.new_tokens(self.pump_since["new"])
         self.pump_since["new"] = max([self.pump_since["new"]] + [e["ts"] for e in launches])
         self.pump_stats["launches_seen"] += len(launches)
@@ -410,8 +454,65 @@ class LiveMarket:
                 "mayhem": bool(e.get("mayhem")),
             }
             self.pump_stats["launches"] += 1
+        self._prune_pump_meta(found)
+        return found
+
+    def _prune_pump_meta(self, found):
         if len(self._pump_meta) > 200:  # metadata for tokens that were never added (evicted before pricing, ...)
             self._pump_meta = {a: m for a, m in self._pump_meta.items() if a in found or a in self.tokens}
+
+    def _probation_poll(self, now):
+        """Pumpfun universe: address -> "pumpfun" for the launches that just showed traction. Every launch from
+        the feed with a real creator buy at or above PUMPFUN_MIN_MCAP_SOL waits on probation for PROBATION_MIN
+        minutes after its launch; each cycle up to PROBATION_PER_CYCLE of them (least recently priced first, then
+        oldest) are priced on DexScreener. A launch is promoted when its market cap reaches TRACK_MCAP_USD, or its
+        1h volume TRACK_VOL_USD with at least TRACK_MIN_TXNS transactions; its details go to _pump_meta exactly
+        like the old best-creator-buy rule, so the new token carries `pump`. Launches that never pass expire."""
+        if self.pump is None:
+            return {}
+        launches = self.pump.new_tokens(self.pump_since["new"])
+        self.pump_since["new"] = max([self.pump_since["new"]] + [e["ts"] for e in launches])
+        self.pump_stats["launches_seen"] += len(launches)
+        for e in launches:
+            a = e.get("mint")
+            if not plausible_mint(a) or a in self.tokens or a in self._pump_meta or a in self.probation:
+                continue
+            # traction at second zero = the creator's own buy (see the old rule in _discover_pumpfun)
+            if (e.get("initial_buy_sol") or 0) <= 0 or (e.get("mcap_sol") or 0) < PUMPFUN_MIN_MCAP_SOL:
+                self.pump_stats["skipped_mcap"] += 1
+                continue
+            self.probation[a] = {**e, "first_seen": now, "polled_at": 0}
+        cutoff = now - PROBATION_MIN * 60
+        for a, e in list(self.probation.items()):
+            if a in self.tokens or a in self._pump_meta:  # graduated or force-tracked meanwhile
+                del self.probation[a]
+            elif (e.get("ts") or e["first_seen"]) < cutoff:
+                del self.probation[a]
+                self.probation_stats["expired"] += 1
+        batch = sorted(self.probation, key=lambda a: (self.probation[a]["polled_at"], self.probation[a].get("ts") or 0))
+        batch = batch[:PROBATION_PER_CYCLE]
+        if not batch:
+            return {}
+        for a in batch:
+            self.probation[a]["polled_at"] = now
+        self.probation_stats["polled"] += len(batch)
+        found = {}
+        for a, t in self._fetch_pairs(batch).items():
+            if a not in self.probation:
+                continue
+            if not (t["mcap"] >= TRACK_MCAP_USD
+                    or (t["vol_h1"] >= TRACK_VOL_USD and t["buys_h1"] + t["sells_h1"] >= TRACK_MIN_TXNS)):
+                continue
+            e = self.probation.pop(a)
+            found[a] = "pumpfun"
+            self._pump_meta[a] = {
+                "launched": e["ts"], "initial_mcap_sol": round(e.get("mcap_sol") or 0, 2),
+                "initial_buy_sol": round(e.get("initial_buy_sol") or 0, 3), "creator": e.get("creator"),
+                "curve": e.get("curve"), "symbol": e.get("symbol") or "", "name": e.get("name") or "",
+                "mayhem": bool(e.get("mayhem")),
+            }
+            self.pump_stats["launches"] += 1
+            self.probation_stats["promoted"] += 1
         return found
 
     def _new_token(self, a, srcs, now):
@@ -518,8 +619,9 @@ class LiveMarket:
         return {"pumpfun": pump, "organic": organic, "promoted": rest - organic}
 
     def _evict(self, held, now=None):
-        """Shrink the pool to max_tracked. Tokens DexScreener has not priced for 10 minutes go first (dead curves,
-        unlisted mints). Then slots are shared between the groups by quota() ("both" tokens count for organic and
+        """Shrink the pool to max_tracked. Dead tokens go first, oldest first: pump.fun launches trading at 10% or
+        less of their tracked high, and tokens DexScreener has not priced for 10 minutes (dead curves, unlisted
+        mints). Then slots are shared between the groups by quota() ("both" tokens count for organic and
         promoted and go last): the oldest free token of whichever group is furthest over its share goes, launches
         before graduations in the pump.fun group. Held tokens and tokens protected by track() are never evicted."""
         excess = len(self.tokens) - self.max_tracked
@@ -538,7 +640,9 @@ class LiveMarket:
                 if a in held or (t.get("protect_until") or 0) > now:
                     continue
                 free[g].append(a)
-                if not t.get("price") and now - (t.get("first_seen") or now) > 600:
+                if t.get("source") == "pumpfun" and 0 < (t.get("price") or 0) <= 0.1 * (t.get("high") or 0):
+                    dead.append(a)  # a launch down 90%+ from its high: the curve is dead
+                elif not t.get("price") and now - (t.get("first_seen") or now) > 600:
                     dead.append(a)
             victim = None
             if dead:
@@ -560,11 +664,15 @@ class LiveMarket:
         thread under the arena lock. An already-tracked token keeps its original source and gains `source` in its
         `sources` list. Other free tokens are evicted to respect max_tracked (`held` = positions to protect, on
         top of the held set from the last refresh). Returns the token dict, or None for an implausible mint, SOL
-        or a major."""
+        or a major, and in the pumpfun universe for anything that is not a pump.fun mint (ends in "pump" or has
+        pump.fun details)."""
         if not plausible_mint(mint) or mint == SOL_MINT or mint in MAJORS:
             return None
-        now = time.time()
         t = self.tokens.get(mint)
+        if UNIVERSE == "pumpfun" and not (mint.endswith("pump") or mint in self._pump_meta
+                                          or (t is not None and t.get("pump"))):
+            return None
+        now = time.time()
         if t is None:
             t = self._new_token(mint, source, now)
         else:
