@@ -9,6 +9,7 @@ import threading
 import time
 
 import exchange
+import market
 from agent_base import Agent
 
 # The brief every Claude gets. It is IDENTICAL for every model so the model comparison stays fair; personas only
@@ -127,8 +128,7 @@ coin: no symbols, tickers, names, addresses or links. A post that does is blocke
 Post at most once per look, and only when you have something useful to add.
 
 What each look shows you:
-- candidates: the busiest tokens that passed the vetoes, each with its "structure". "chg_since" is the price change from
-  2, 5, 10, 20 and 30 minutes ago to now, from the arena's own 30-second price history, and swing_30m its noise level.
+{UNIVERSE_TEXT}
 - source (on a candidate): where the arena found it. "promoted" (its team paid DexScreener for a listing or boost),
   "organic" (trending on its own on GeckoTerminal), "both", "pumpfun" (a fresh pump.fun launch still on its bonding
   curve: brand new, thin and the riskiest of all), "graduated" (finished its pump.fun curve and moved to a PumpSwap
@@ -148,8 +148,9 @@ What each look shows you:
 Rules:
 - {SIZE_RULE} At most 8 open positions.
 - Orders fill shortly after you answer (usually within a minute), at whatever the price is then.
-- next_check_min is when you want to look again, from {MIN_CHECK} to {MAX_CHECK} minutes. Between looks only your exits, the
-  exit ladder, your alarms and the watcher act for you.
+- next_check_min is when you want to look again, from {MIN_CHECK} to {MAX_CHECK} minutes;
+  look every minute if the market calls for it. Between looks only your exits, the exit ladder, your alarms and the
+  watcher act for you.
 - Every trade pays the {FEE_TEXT}, plus the pool fee and price impact, buying and selling. Fills use real Jupiter swap
   quotes when available.
 - Like on-chain, transactions sometimes fail (about 5%, more on tokens moving hard): nothing trades but any network fee
@@ -168,9 +169,27 @@ DEFAULT_WATCH = LEGACY_WATCH if os.environ.get("ARENA_WATCH_DEFAULT", "").strip(
 JOURNAL_MAX = max(1, int(os.environ.get("ARENA_JOURNAL_MAX", "100") or 100))
 JOURNAL_CHARS = 300
 
+# What each look lists, by universe (market.UNIVERSE). all: one candidates list. pumpfun: two lanes and how pump.fun works.
+UNIVERSE_TEXT_ALL = """- candidates: the busiest tokens that passed the vetoes, each with its "structure". "chg_since" is the price change from
+  2, 5, 10, 20 and 30 minutes ago to now, from the arena's own 30-second price history, and swing_30m its noise level."""
+UNIVERSE_TEXT_PUMPFUN = """- graduates: pump.fun coins that graduated to PumpSwap in the last 6 hours and passed the vetoes, newest first (at
+  most 15), each with minutes_since_graduation and its "structure".
+- curve: pump.fun coins still on their bonding curve that passed the vetoes (at most 15), the fastest-filling first.
+  curve_pct is how far the curve has filled (0-100); curve_pct_chg_10m is how much it filled in the last 10 minutes
+  (null until the arena has 10 minutes of history on the coin).
+- chg_since (on both lists) is the price change from 2, 5, 10, 20 and 30 minutes ago to now, from the arena's own
+  30-second price history, and swing_30m its noise level. A coin you hold stays in positions after it leaves both lists.
+- pump.fun: every coin in this arena is a pump.fun coin. A new coin trades on a bonding curve; the curve fills at about
+  $69k market cap and the coin then migrates (graduates) to a PumpSwap pool. curve_pct is its progress toward that.
+  Most graduates lose most of their value within 20 minutes of migrating, and the first minute after a launch or a
+  migration is the snipers' exit. Fees: the {FEE_TEXT} on each side, plus the pool fee and price impact."""
+
+
 def fill_brief(text, min_check, max_check):
     """Fill the brief's placeholders: look interval, journal size, fees and costs, lives and the bust line."""
     import arena as _ar  # the moonshot and runner settings live with the rules that enforce them
+    universe = UNIVERSE_TEXT_PUMPFUN if market.UNIVERSE == "pumpfun" else UNIVERSE_TEXT_ALL
+    text = text.replace("{UNIVERSE_TEXT}", universe)  # first: the pump.fun text carries {FEE_TEXT}
     lives = max(1, int(os.environ.get("ARENA_LIVES", "3") or 3))
     bust = float(os.environ.get("ARENA_BUST_PCT", "10") or 10)
     weights = [float(x) for x in (os.environ.get("ARENA_LIFE_LOSS_WEIGHTS", "0.5,0.75,1") or "1").split(",") if x.strip()] or [1.0]
@@ -306,6 +325,71 @@ _parse_json = parse_reply
 
 
 MEV_TEXT = "Buying a token that is pumping fast also costs extra slippage from sandwich bots. "
+
+
+def _format_candidate(t, v, structure):
+    """One market token as a Claude sees it on a look. v is the agent's view (chg_since, token_history);
+    optional token keys (chg_h24, age_min, flags, rating) may be missing."""
+    a = t["address"]
+    chg = {k: x for k, x in ((v.get("chg_since") or {}).get(a) or {}).items() if k != "curve_pct_10m"}
+    return {
+        "token": a, "symbol": t["symbol"], "price": t["price"],
+        "liquidity": round(t["liquidity"]), "mcap": round(t["mcap"]),
+        "vol_1h": round(t["vol_h1"]), "buys_1h": t["buys_h1"], "sells_1h": t["sells_h1"],
+        "chg_5m": round(t["chg_m5"], 1), "chg_1h": round(t["chg_h1"], 1),
+        "chg_24h": round(t["chg_h24"], 1) if t.get("chg_h24") is not None else None,
+        "age_min": round(t["age_min"]) if t.get("age_min") is not None else None,
+        "rating": t.get("rating"), "flags": t.get("flags") or [], "chg_since": chg,
+        "source": t.get("source"),
+        **({"sources": t["sources"]} if len(t.get("sources") or ()) > 1 else {}),
+        **({"holders": {k: t["rug"].get(k) for k in ("top1_pct", "top10_pct", "creator_pct", "insider_pct",
+                                                     "lp_locked_pct", "rugcheck_score", "total_holders")}}
+           if isinstance(t.get("rug"), dict) and not t["rug"].get("error") else {}),
+        **({"your_past_trades": v["token_history"][a]} if a in (v.get("token_history") or {}) else {}),
+        **({"structure": structure[a]} if (structure or {}).get(a) else {}),
+    }
+
+
+LANE_CAP = 15            # coins per lane on a look
+GRADUATE_WINDOW = 6 * 3600  # graduates stay in their lane this long after migrating
+
+
+def build_lanes(candidates, vetoed, chg_since, now, view=None, structure=None):
+    """Split pump.fun tokens into the two lanes a Claude sees in the pumpfun universe, vetoed ones left out.
+    graduates: migrated within GRADUATE_WINDOW, newest first, with minutes_since_graduation.
+    curve: still on the bonding curve, fastest-filling over the last 10 minutes first (then the most filled), with
+    curve_pct and curve_pct_chg_10m (None until there are 10 minutes of curve history)."""
+    v = view if view is not None else {"chg_since": chg_since}
+    vetoed = vetoed or {}
+    grads, curve = [], []
+    for t in candidates:
+        if t["address"] in vetoed:
+            continue
+        pump = t.get("pump") or {}
+        if pump.get("graduated"):
+            if now - pump["graduated"] <= GRADUATE_WINDOW:
+                grads.append(t)
+        elif t.get("dex") == "pumpfun" or t.get("source") == "pumpfun":
+            curve.append(t)
+
+    grads.sort(key=lambda t: t["pump"]["graduated"], reverse=True)
+    lanes = {"graduates": [{**_format_candidate(t, v, structure),
+                            "minutes_since_graduation": int(max(0, now - t["pump"]["graduated"]) // 60)}
+                           for t in grads[:LANE_CAP]]}
+
+    def curve_row(t):
+        pct = float((t.get("pump") or {}).get("curve_pct") or 0)
+        past = (chg_since.get(t["address"]) or {}).get("curve_pct_10m")
+        return t, pct, (round(pct - past, 1) if past is not None else None)
+    rows = sorted(map(curve_row, curve), key=lambda r: (-(r[2] or 0), -r[1]))
+    lanes["curve"] = [{**_format_candidate(t, v, structure), "curve_pct": round(pct, 1), "curve_pct_chg_10m": d}
+                      for t, pct, d in rows[:LANE_CAP]]
+    return lanes
+
+
+def _listed(state):
+    """Every token a look showed (candidates or both lanes, and positions), for mapping orders to symbols."""
+    return [t for k in ("candidates", "graduates", "curve", "positions") for t in state.get(k) or ()]
 
 
 class LLMAgent(Agent):
@@ -492,7 +576,12 @@ class LLMAgent(Agent):
     def _state(self, v):
         vetoed = v.get("vetoes") or {}
         structure = v.get("structure") or {}
-        cands = sorted((t for t in v["candidates"] if t["address"] not in vetoed), key=lambda t: t["vol_h1"], reverse=True)[:25]
+        if market.UNIVERSE == "pumpfun":  # two lanes: fresh graduates and coins still on their curve
+            listing = build_lanes(v["candidates"], vetoed, v.get("chg_since") or {}, v.get("now") or time.time(),
+                                  view=v, structure=structure)
+        else:
+            cands = sorted((t for t in v["candidates"] if t["address"] not in vetoed), key=lambda t: t["vol_h1"], reverse=True)[:25]
+            listing = {"candidates": [_format_candidate(t, v, structure) for t in cands]}
         state = {
             "cash": round(v["cash"], 2),
             "equity": round(v["equity"], 2),
@@ -503,21 +592,7 @@ class LLMAgent(Agent):
                            **({"swing_30m": v["chg_since"][p["token"]]["swing_30m"]}
                               if "swing_30m" in v.get("chg_since", {}).get(p["token"], {}) else {})}
                           for p in v["positions"]],
-            "candidates": [{
-                "token": t["address"], "symbol": t["symbol"], "price": t["price"],
-                "liquidity": round(t["liquidity"]), "mcap": round(t["mcap"]),
-                "vol_1h": round(t["vol_h1"]), "buys_1h": t["buys_h1"], "sells_1h": t["sells_h1"],
-                "chg_5m": round(t["chg_m5"], 1), "chg_1h": round(t["chg_h1"], 1), "chg_24h": round(t["chg_h24"], 1),
-                "age_min": round(t["age_min"]) if t.get("age_min") is not None else None,
-                "rating": t["rating"], "flags": t["flags"], "chg_since": v.get("chg_since", {}).get(t["address"], {}),
-                "source": t.get("source"),
-                **({"sources": t["sources"]} if len(t.get("sources") or ()) > 1 else {}),
-                **({"holders": {k: t["rug"].get(k) for k in ("top1_pct", "top10_pct", "creator_pct", "insider_pct",
-                                                             "lp_locked_pct", "rugcheck_score", "total_holders")}}
-                   if isinstance(t.get("rug"), dict) and not t["rug"].get("error") else {}),
-                **({"your_past_trades": v["token_history"][t["address"]]} if t["address"] in v.get("token_history", {}) else {}),
-                **({"structure": structure[t["address"]]} if structure.get(t["address"]) else {}),
-            } for t in cands],
+            **listing,
             **({"vetoed_count": len(vetoed)} if vetoed else {}),
             "market_memory": v.get("market_memory"),
             "smart_money": v.get("smart_money"),
@@ -556,7 +631,7 @@ class LLMAgent(Agent):
             out = parse_reply(text)
             orders = out.get("orders") or []
             orders = [o for o in orders if isinstance(o, dict)] if isinstance(orders, list) else []
-            symbols = {t["token"]: t["symbol"] for t in state["candidates"] + state["positions"]}
+            symbols = {t["token"]: t["symbol"] for t in _listed(state)}
             for o in orders:
                 o["symbol"] = symbols.get(o.get("token"), "?")
             try:
@@ -719,7 +794,7 @@ class CouncilAgent(LLMAgent):
             self.db.add_council_message(time.time(), meeting, author, role, kind, text, list(orders))
 
     def _ask(self, state):
-        symbols = {t["token"]: t["symbol"] for t in state["candidates"] + state["positions"]}
+        symbols = {t["token"]: t["symbol"] for t in _listed(state)}
         tidy = lambda orders: [{k: o.get(k) for k in ("action", "usd", "fraction", "reason")} | {"symbol": symbols.get(o.get("token"), "?")}
                                for o in (orders if isinstance(orders, list) else []) if isinstance(o, dict)]
         board = list(reversed(self.db.council_board(24))) if self.db is not None else []
@@ -790,8 +865,8 @@ def build_llm_agents():
     if mode == "auto":
         mode = "claude-code" if exe else "api" if os.environ.get("ANTHROPIC_API_KEY") else "none"
     entries = [e.strip() for e in os.environ.get("ARENA_LLM_MODELS", "").split(",") if e.strip()]
-    min_check = float(os.environ.get("ARENA_LLM_MIN_CHECK", "2"))
-    max_check = float(os.environ.get("ARENA_LLM_MAX_CHECK", "10"))
+    min_check = float(os.environ.get("ARENA_LLM_MIN_CHECK", "1"))
+    max_check = float(os.environ.get("ARENA_LLM_MAX_CHECK", "60"))
 
     def lineup(default):
         for e in entries or default.split(","):

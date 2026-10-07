@@ -150,6 +150,7 @@ class Arena:
         self.memory = market_memory.MarketMemory() if market_memory.ENABLED else None
         self.run_started = db.load_state("__run_started__") or self.started  # survives restarts; reset_money moves it
         self.liq_history = {}   # token -> deque of (ts, liquidity), for liquidity_vs_1h and the liquidity exit
+        self.curve_history = {}  # pump.fun curve coin -> deque of (ts, curve_pct), for curve_pct_10m
         self.vetoes = {}        # token -> reasons a buy is refused (signals.veto_report), refreshed every SIGNALS_SECS
         self.structure = {}     # token -> compact structural view shown to the Claudes
         self.creator_sold = {}  # token -> dollars its creator sold in the last hour (the exit ladder sells on it)
@@ -177,9 +178,13 @@ class Arena:
             self.history.setdefault(t["address"], deque(maxlen=130)).append((now, t["price"]))
             if t.get("liquidity"):
                 self.liq_history.setdefault(t["address"], deque(maxlen=300)).append((now, t["liquidity"]))
+            pump = t.get("pump") or {}
+            if pump.get("curve_pct") is not None and not pump.get("graduated"):
+                self.curve_history.setdefault(t["address"], deque(maxlen=130)).append((now, pump["curve_pct"]))
         if self.ticks % 120 == 0:  # forget tokens the feed dropped over an hour ago
             self.history = {a: h for a, h in self.history.items() if now - h[-1][0] < 3600}
             self.liq_history = {a: h for a, h in self.liq_history.items() if now - h[-1][0] < 3600}
+            self.curve_history = {a: h for a, h in self.curve_history.items() if now - h[-1][0] < 3600}
 
     SIGNALS_SECS = 60  # the pool feed behind the flow signals only changes when a pool is polled (every few minutes)
 
@@ -218,11 +223,18 @@ class Arena:
                 self.history.setdefault(t["address"], deque(maxlen=130)).append((snap.ts, t["price"]))
 
     def chg_since(self, addr, now):
-        """Price change (%) from 2, 5, 10, 20 and 30 minutes ago to now, from the arena's own price history."""
+        """Price change (%) from 2, 5, 10, 20 and 30 minutes ago to now, from the arena's own price history.
+        For a pump.fun coin still on its curve, also curve_pct_10m: its curve_pct about 10 minutes ago."""
+        out = {}
+        ch = getattr(self, "curve_history", {}).get(addr)
+        if ch:
+            past = next((c for ts, c in reversed(ch) if now - ts >= 600 - 15), None)
+            if past is not None:
+                out["curve_pct_10m"] = past
         h = self.history.get(addr)
         if not h or len(h) < 2:
-            return {}
-        price, out = h[-1][1], {}
+            return out
+        price = h[-1][1]
         for m in (2, 5, 10, 20, 30):
             past = next((p for ts, p in reversed(h) if now - ts >= m * 60 - 15), None)
             if past:
