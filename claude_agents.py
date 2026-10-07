@@ -243,12 +243,14 @@ MAX_BUY_FRAC = min(1.0, max(0.01, float(os.environ.get("ARENA_LLM_MAX_BUY_PCT", 
 
 # Same model and rules, different trading style
 PERSONAS = {
-    "degen": ("Degen", "Your style: degen. You hunt fresh curve coins and fast movers in both lanes, size big when you like a "
-                       "setup, take profits fast and move on. You expect to burn lives; that is what they are for. You still "
+    "degen": ("Degen", "Your style: degen. You hunt fresh curve coins and fast movers in both lanes, size big (a quarter of your "
+                       "cash or more when you like a setup), take profits fast and move on. You expect to burn lives; that is what they are for. You still "
                        "skip the obvious rugs the vetoes leave behind (red rating, creator rug history)."),
     "ape": ("Ape", "Your style: ape. One conviction coin per life: when you find a curve coin or fresh graduate with real net "
-                   "buying from many wallets, you go in at moonshot size and hold for the multiple, letting the ladder take "
-                   "profits. Each life is a lottery ticket on one coin; when it busts you pick the next."),
+                   "buying from many wallets, you put a large share of your cash into it (think a third to two thirds, sized "
+                   "to the pool so your own exit doesn't crush the price), hold for the multiple and let the ladder take "
+                   "profits. Don't flag these as moonshots; that caps the size. Each life is a lottery ticket on one coin; "
+                   "when it busts you pick the next."),
     "skeptic": ("Skeptic", "Your style: skeptic. You trade graduates only, never the bonding curve. You assume every coin is a rug until its "
                            "holders, LP lock and flow prove otherwise: no concentrated holders, liquidity that is deep and "
                            "holding, net buying that is real. You size small. You hold cash when nothing passes your checks, "
