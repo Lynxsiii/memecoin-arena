@@ -778,7 +778,7 @@ const span = s => s < 60 ? `${Math.max(0, Math.round(s))}s` : s < 3600 ? `${Math
 const ago = s => s < 45 ? "just now" : `${span(s)} ago`;
 let skew = 0;                       // server clock minus browser clock
 const now = () => Date.now() / 1000 + skew;
-let data = null, lastTradeId = null, seenDecisions = new Set(), firstLoad = true, chart;
+let analytics = null, data = null, lastTradeId = null, seenDecisions = new Set(), firstLoad = true, chart;
 const emit = (name, detail) => { try { document.dispatchEvent(new CustomEvent(name, {detail})); } catch (e) { console.error(e); } };
 const arenaPrefs = {  // per-browser settings for plugins
   get(k, def) { try { const v = localStorage.getItem("arena:" + k); return v === null ? def : JSON.parse(v); } catch { return def; } },
@@ -1064,12 +1064,22 @@ function renderTrades() {
   lastTradeId = newest;
 }
 
+function verdictHTML(a) {
+  if (a.kind !== "llm" || !analytics || !analytics.agents) return "";
+  const r = (analytics.agents.find(x => x.name === a.name) || {}).readiness;
+  if (!r) return "";
+  return `<div class="desc">verdict: ${r.ready ? "ready" : `pending (${esc(r.passed)} of ${esc(r.total)})`}</div>`;
+}
+async function refreshAnalytics() {
+  try { analytics = await (await fetch("/api/analytics")).json(); } catch { /* keep the last good copy */ }
+}
+
 function renderTables() {
   setHTML($("board"), data.agents.map((a, i) => `
     <tr data-agent="${esc(a.name)}"${a.out === true ? ' class="out"' : ""} style="--c:${colorOf(a)}"><td>${ordinal(i + 1)}</td>
       <td><div class="who-cell">${avatar(a.name)}<div><b>${esc(a.name)}</b>${heartsHTML(a)}${a.bio
         ? `<div class="bio" title="${esc(a.description)}">${esc(a.bio)}</div>${a.catchphrase ? `<div class="desc">"${esc(a.catchphrase)}"</div>` : ""}`
-        : `<div title="${esc(a.description)}">${esc(a.description)}</div>`}</div></div></td>
+        : `<div title="${esc(a.description)}">${esc(a.description)}</div>`}${verdictHTML(a)}</div></div></td>
       <td class="n">${money(a.equity)}</td><td class="n ${a.pnl_pct >= 0 ? "pos" : "neg"}">${pct(a.pnl_pct)}</td>
       <td class="n">${money(a.cash)}</td><td class="n">${a.trades}</td>
       <td class="n">${a.win_rate == null ? "–" : a.win_rate + "%"}</td><td class="n">${a.max_dd.toFixed(1)}%</td></tr>`).join(""));
@@ -1368,6 +1378,8 @@ showTab(TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : arenaPr
 refresh();
 refreshUsageBadge();
 setInterval(refreshUsageBadge, 30000);
+refreshAnalytics();
+setInterval(refreshAnalytics, 60000);
 setInterval(refresh, 3000);
 setInterval(refreshChart, 20000);
 setInterval(tick, 1000);

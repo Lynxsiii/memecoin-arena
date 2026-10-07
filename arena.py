@@ -308,6 +308,16 @@ class Arena:
             if strategy_room.ENABLED:
                 self.db.add_room_post(now, "arena", f"Money reset: run {season} was archived and a new run started. Everyone "
                                                     f"has ${self.start_cash:,.0f} again and every Claude has {self.lives} lives.")
+                try:
+                    import analytics
+                    r, names = analytics.READY, ", ".join(analytics.BENCHMARKS[:-1]) + f" and {analytics.BENCHMARKS[-1]}"
+                    self.db.add_room_post(now, "arena", f"Run {season + 1} started: pump.fun only. Verdict per Claude after "
+                                                        f"{r['days']} days and {r['closed_trades']} closed trades: beats {names} "
+                                                        f"after the luck check at {r['confidence'] * 100:.0f}% confidence, drawdown "
+                                                        f"under {r['max_drawdown_pct']}%, profit factor over {r['profit_factor']}. "
+                                                        f"Roster stays fixed until then.")
+                except Exception as e:  # the rule post is a courtesy; it must never break a reset
+                    print(f"[arena] verdict post failed: {e}")
             self.news = (now, f"Every agent was reset to ${self.start_cash:,.0f} at {time.strftime('%H:%M', time.localtime(now))}; "
                               f"your old positions are gone and your journal was {'kept' if keep_journals else 'cleared'}.")
             print(f"[arena] money reset: season {season} archived, journals {'kept' if keep_journals else 'wiped'}, backup {backup}")

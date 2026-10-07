@@ -517,6 +517,15 @@ class Notifier:
         if wins:
             lines.append("Usage: " + ", ".join(f"{(w.get('label') or w['kind'])[:1].lower()}{(w.get('label') or w['kind'])[1:]} "
                                                f"{w['pct']:.0f}%" for w in wins))
+        try:
+            import analytics
+            verdicts = [f"{a['name']} {a['readiness']['passed']}/{a['readiness']['total']}"
+                        for a in analytics.compute(self.arena, self.db, getattr(self, "control", None))["agents"]
+                        if a.get("readiness") and getattr(self.arena.agents.get(a["name"]), "kind", None) == "llm"]
+            if verdicts:
+                lines.append("Verdicts: " + ", ".join(verdicts))
+        except Exception:
+            pass
         return "\n".join(lines)
 
     # ----- sending -----
