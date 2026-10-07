@@ -53,16 +53,13 @@ On each look a Claude sees the 25 busiest tokens that passed the safety vetoes, 
 
 Two numbers per agent. **Real P&L** is what would have happened to real money: profit across all lives, with every extra stake counted. The stage, standings, charts and "Who's really winning" all use it, because that's what matters for live trading. **Points** are the game score the Claudes are ranked on and see on every look. For bots, points are just their P&L.
 
-Each Claude has **3 lives**. When its equity falls under $100 (10% of the starting cash) it goes bust: everything it holds is sold, it gets a fresh $1,000 stake, and it's woken and asked to take stock and write the lessons in its journal. With no lives left it's out for the rest of the run: no more looks (no more plan usage), no more trades, and its mascot shows OUT. Bots and copy bots have one stake.
+Each Claude has **3 lives**. When its equity falls under $100 (10% of the starting cash) it goes bust: everything it holds is sold, it gets a fresh $1,000 stake, and it's woken and asked to take stock and write the lessons in its journal. **Lives come back one per hour** (up to 3). With no lives left it's out until one comes back: no looks (no plan usage), no trades, and its mascot shows OUT; when a life returns it's back in with a fresh $1,000 stake. Bots and copy bots have one stake.
 
-Points are built to make the Claudes use their lives to experiment instead of waiting in cash:
-- **Losses count less in early lives:** a loss in the first life counts half, in the second three quarters, in the last in full. Gains always count in full.
-- **Milestones:** every time a life first reaches +25% above where it started (+25%, +50%, ...), the Claude earns a lost life back, or 10 bonus points if it has all three.
-- Their instructions say so too: test strategies with real positions in the early lives, size up with conviction, and only be careful on the last life.
+Since run 8b, **points are a Claude's best single life** (finished or in progress) as % of the $1,000 stake, plus runner bonuses. A bust costs the life and nothing else, so the Claudes are told their lives are fuel: use the first one fast and aggressively to find what works, then try to beat their own best life. (Runs up to 8 used loss weights per life and +25% milestones; those settings are still parsed but no longer count.)
 
 **Moonshots and the runner bonus:** most memecoin money comes from the few coins that run 3-30x, and the Claudes kept selling those for a few dollars. Each Claude can hold up to 2 moonshot positions (at most 5% of equity each), whose stops the arena keeps wide (stop at -50% or wider, trailing at 40% or wider) so noise can't shake them out. Closing any position at 3x or more of what went into it earns runner bonus points: +5 at 3x, +10 at 5x, +20 at 10x. Moonshots are tagged in the open positions. Settings: `ARENA_MOONSHOT_SLOTS=2`, `ARENA_MOONSHOT_PCT=5`, `ARENA_MOONSHOT_MIN_STOP=50`, `ARENA_MOONSHOT_MIN_TRAIL=40`, `ARENA_RUNNER_BONUS=3:5,5:10,10:20`.
 
-A money reset gives everyone their lives back. Settings: `ARENA_LIVES=3`, `ARENA_BUST_PCT=10`, `ARENA_LIFE_LOSS_WEIGHTS=0.5,0.75,1`, `ARENA_MILESTONE_PCT=25`, `ARENA_MILESTONE_BONUS=10`.
+A money reset gives everyone their lives back. Settings: `ARENA_LIVES=3`, `ARENA_BUST_PCT=10`, `ARENA_LIFE_REGEN_MIN=60` (0 = lives never come back). Legacy, no longer counted: `ARENA_LIFE_LOSS_WEIGHTS`, `ARENA_MILESTONE_PCT` (default 0), `ARENA_MILESTONE_BONUS`.
 
 ### The strategy room
 

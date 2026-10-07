@@ -1,4 +1,10 @@
-"""Memecoin Agent Arena - paper trading only. Run:  python main.py   then open http://localhost:8000"""
+"""Memecoin Agent Arena - paper trading only. Run:  python main.py   then open http://localhost:8000
+
+Market memory warm-up (live market only): on start, market memory and the screens' price charts are warmed up from
+the recordings. ARENA_MEMORY_FROM_RUN=1 (default) loads only snapshots from the current run (since the saved
+__run_started__, and at most the last 24 hours), so a new market starts with a clean memory; ARENA_MEMORY_FROM_RUN=0
+restores the plain last-24-hours warm-up.
+"""
 import argparse
 import os
 import threading
@@ -27,6 +33,16 @@ from arena import Arena  # noqa: E402
 from db import DB  # noqa: E402
 from market import LiveMarket, MockMarket  # noqa: E402
 from usage import UsageControl  # noqa: E402
+
+
+def memory_since(db, now):
+    """Where the market memory warm-up starts: 24 hours ago, or the current run's start if later (ARENA_MEMORY_FROM_RUN=1)."""
+    since = now - 86400
+    if os.environ.get("ARENA_MEMORY_FROM_RUN", "1").strip().lower() not in ("0", "off", "false", "no"):
+        started = db.load_state("__run_started__")
+        if started:
+            since = max(since, float(started))
+    return since
 
 
 def max_drawdown(series):
@@ -242,7 +258,9 @@ def ask_keep_journals():
 
 def main():
     load_dotenv()
-    ap = argparse.ArgumentParser(description="Memecoin Agent Arena (paper trading)")
+    ap = argparse.ArgumentParser(description="Memecoin Agent Arena (paper trading)",
+                                 epilog="ARENA_MEMORY_FROM_RUN=1 (default) warms market memory up from this run's recordings "
+                                        "only; 0 uses the last 24 hours.")
     ap.add_argument("--mock", action="store_true", help="use a fake offline market instead of live data")
     ap.add_argument("--tick", type=int, default=30, help="seconds between ticks (default 30)")
     ap.add_argument("--cash", type=float, default=1000.0, help="starting fake cash per agent")
@@ -288,14 +306,16 @@ def main():
             import replay
             files = sorted(glob.glob(os.path.join(HERE, "recordings", "[0-9]*.jsonl.gz")), key=replay._segment_key)[-12:]
             hour_ago = time.time() - 3900
+            since = memory_since(db, time.time())
 
-            def snaps():  # market memory gets the last day; the screens' price charts get the last hour
-                for snap in replay.iter_snapshots(files, time.time() - 86400, None):
+            def snaps():  # market memory gets the last day (this run's part); the screens' price charts get the last hour
+                for snap in replay.iter_snapshots(files, since, None):
                     if snap.ts >= hour_ago:
                         arena.warm_history(snap)
                     yield snap
             arena.memory.load(snaps())
-            print(f"[main] market memory and price charts warmed up from {len(files)} recording file(s)")
+            print(f"[main] market memory and price charts warmed up from {len(files)} recording file(s), "
+                  f"since {time.strftime('%Y-%m-%d %H:%M', time.localtime(since))}")
         except Exception as e:
             print(f"[main] couldn't warm up market memory: {e}")
     if args.reset_money:

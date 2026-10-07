@@ -154,3 +154,46 @@ def test_state_passes_buy_budget(monkeypatch):
     agent = LLMAgent(_Backend())
     v = {**_view([], []), "buy_budget": {"buys_left_24h": 2, "next_buy_in_min": 18}}
     assert agent._state(v)["buy_budget"] == {"buys_left_24h": 2, "next_buy_in_min": 18}
+
+
+def test_pinned_token_kept_past_the_cap():
+    now = 1_000_000
+    toks = [_tok(f"G{i}pump", pump={"graduated": now - i * 60}) for i in range(16)]
+    lanes = build_lanes(toks, vetoed={}, chg_since={}, now=now, pinned={"G15pump"})
+    assert len(lanes["graduates"]) == 16 and lanes["graduates"][-1]["token"] == "G15pump"
+    lanes = build_lanes(toks, vetoed={"G15pump": ["rug"]}, chg_since={}, now=now, pinned={"G15pump"})
+    assert len(lanes["graduates"]) == 15 and "G15pump" not in [t["token"] for t in lanes["graduates"]]
+
+
+def test_pinned_curve_coin_and_no_duplicates():
+    now = 1_000_000
+    toks = [_tok(f"C{i}pump", dex="pumpfun", pump={"curve_pct": 50.0 - i}) for i in range(17)]
+    lanes = build_lanes(toks, vetoed={}, chg_since={}, now=now, pinned={"C16pump", "C0pump"})
+    tokens = [t["token"] for t in lanes["curve"]]
+    assert len(tokens) == 16 and tokens[-1] == "C16pump" and tokens.count("C0pump") == 1
+
+
+def test_state_pins_wake_tokens_and_look_clears_them(monkeypatch):
+    monkeypatch.setattr(market, "UNIVERSE", "pumpfun")
+    agent = LLMAgent(_Backend())
+    agent._think = lambda state: None
+    now = 1_000_000
+    toks = [_tok(f"G{i}pump", pump={"graduated": now - i * 60}) for i in range(16)]
+    agent.wake("watcher: G15 up 12% in 5 min")
+    agent.wake_tokens.add("G15pump")
+    v = _view([], toks)
+    assert "G15pump" in [t["token"] for t in agent._state(v)["graduates"]]
+    agent.decide(v)
+    agent.job.join()
+    assert agent.wake_tokens == set()
+
+
+def test_watcher_records_wake_tokens(arena_llm):
+    a, name, view = arena_llm()
+    agent = a.agents[name]
+    agent.wake_tokens, agent.watch_seen = set(), {}
+    agent.watch_rule = lambda: {"min_chg_5m": -1000, "max_chg_5m": 1000, "min_vol_1h": 0, "min_liquidity": 0,
+                                "min_age_min": 0, "ratings": ["green", "yellow", "red", None]}
+    a.check_watch(view["now"])
+    hit = {t["address"] for t in a.market.candidates()}
+    assert agent.wake_tokens and agent.wake_tokens <= hit

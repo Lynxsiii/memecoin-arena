@@ -110,17 +110,14 @@ buy (at most {MOON_PCT}% of your equity each). The arena keeps a moonshot's stop
 at {MOON_TRAIL}% or wider so noise can't shake it out, and the exit ladder still takes profits on the way up. Closing ANY position
 at 3x or more of what you put in earns runner bonus points: {RUNNER_TIERS}. your_score shows your moonshot slots.
 
-Scoring: points are the only score that counts, and the scoreboard ranks everyone by them. Points are your profit
-% across all your lives after every cost, with two twists. Losses count less in early lives: a loss in your first
-life counts {LOSS_W1}x, in your second {LOSS_W2}x, in your last {LOSS_W3}x (gains always count in full). And every time a
-life first reaches +{MILESTONE_PCT}% above where it started (+{MILESTONE_PCT}%, +{MILESTONE_PCT2}%, ...), you earn a lost life back,
-or {MILESTONE_BONUS} bonus points if you have all {LIVES}. You have {LIVES} lives. If your equity falls under {BUST_PCT}% of
-your stake you go bust: everything you hold is sold and you get a fresh stake; with no lives left you are out for
-the rest of the run.
-Your lives are there to be used: cash scores nothing over a run, so use your early lives to test your strategy with
-real positions and learn from what happens. Be careful on your last life: busting out ends your run. your_score shows
-your points, your real P&L, your current life, how much a loss counts in it, the lives you have left, the next
-milestone and the bust line.
+Scoring: points are the only score that counts, and the scoreboard ranks everyone by them. Your points are your
+best single life, finished or in progress: that life's profit after every cost as a % of the starting stake, plus
+your runner bonuses. You have {LIVES} lives. If your equity falls under {BUST_PCT}% of your stake you go bust: everything
+you hold is sold and you get a fresh stake. A bust costs the life, nothing else: it never lowers your points.
+{REGEN_TEXT} Your real P&L across all your lives is shown separately (real_pnl_pct) and does not rank you.
+Your lives are fuel: use your first life fast and aggressively to find what works, then try to beat your own best
+life. your_score shows your points, your best life (best_life_pct, best_life_no), this_life_pct, the best life among
+the Claudes (leader_best_life_pct), the lives you have left, next_life_in_min and the bust line.
 
 "room_post" (at most 280 characters) posts to the strategy room, the chat all the Claudes share to get better at
 trading: strategies, lessons from your own trades, sizing and risk rules, how to read the data, questions, and
@@ -192,8 +189,21 @@ SOURCE_TEXT_PUMPFUN = """- source (on a candidate): "pumpfun" (still on its bond
   (added because a top wallet bought it)."""
 
 
+def regen_brief_text(lives):
+    """The Scoring sentence on lives coming back (arena.LIFE_REGEN_MIN)."""
+    import arena as _ar
+    if not _ar.LIFE_REGEN_MIN:
+        return "With no lives left you are out for the rest of the run."
+    every = "every hour" if _ar.LIFE_REGEN_MIN == 60 else f"every {_ar.LIFE_REGEN_MIN:g} minutes"
+    return (f"A lost life comes back {every} (up to {lives}); with no lives left you sit out until one comes back, "
+            f"then you are back in with a fresh stake.")
+
+
 def buy_ration_text(ar):
-    """The Rules line for the churn rules (arena.MAX_BUYS_PER_DAY, MIN_BUY_USD, BUY_COOLDOWN_MIN); empty when all are off."""
+    """The Rules line for the churn rules (arena.MAX_BUYS_PER_DAY, MIN_BUY_USD, BUY_COOLDOWN_MIN); empty when all are off.
+    With only the minimum on (the run 8b default): buy as often as you like."""
+    if not (ar.MAX_BUYS_PER_DAY or ar.BUY_COOLDOWN_MIN):
+        return f"- Buy as often as you like; each buy must be at least ${ar.MIN_BUY_USD:g}.\n" if ar.MIN_BUY_USD else ""
     parts = ([f"at most {ar.MAX_BUYS_PER_DAY} buys per rolling 24 hours"] if ar.MAX_BUYS_PER_DAY else []) + \
             ([f"at least ${ar.MIN_BUY_USD:g} each"] if ar.MIN_BUY_USD else []) + \
             ([f"{ar.BUY_COOLDOWN_MIN:g} minutes between buys"] if ar.BUY_COOLDOWN_MIN else [])
@@ -213,10 +223,7 @@ def fill_brief(text, min_check, max_check):
     text = text.replace("{BUY_RATION_TEXT}", buy_ration_text(_ar))
     lives = max(1, int(os.environ.get("ARENA_LIVES", "3") or 3))
     bust = float(os.environ.get("ARENA_BUST_PCT", "10") or 10)
-    weights = [float(x) for x in (os.environ.get("ARENA_LIFE_LOSS_WEIGHTS", "0.5,0.75,1") or "1").split(",") if x.strip()] or [1.0]
-    _w = lambda life: weights[min(life, len(weights)) - 1]
-    milestone = float(os.environ.get("ARENA_MILESTONE_PCT", "25") or 0)
-    bonus = float(os.environ.get("ARENA_MILESTONE_BONUS", "10") or 0)
+    text = text.replace("{REGEN_TEXT}", regen_brief_text(lives))
     return (text.replace("{MIN_CHECK}", f"{min_check:g}").replace("{MAX_CHECK}", f"{max_check:g}")
             .replace("{JOURNAL_MAX}", str(JOURNAL_MAX)).replace("{JOURNAL_CHARS}", str(JOURNAL_CHARS))
             .replace("{FEE_TEXT}", exchange.fee_text()).replace("{COST_TABLE}", exchange.cost_table((25, 50, 100, 250)))
@@ -225,9 +232,6 @@ def fill_brief(text, min_check, max_check):
             .replace("{LADDER_TEXT}", _ar.ladder_text())
             .replace("{MEV_TEXT}", MEV_TEXT if exchange.MEV_MAX_PCT else "")
             .replace("{LIVES}", str(lives)).replace("{BUST_PCT}", f"{bust:g}")
-            .replace("{LOSS_W1}", f"{_w(1):g}").replace("{LOSS_W2}", f"{_w(2):g}").replace("{LOSS_W3}", f"{_w(3):g}")
-            .replace("{MILESTONE_PCT2}", f"{2 * milestone:g}").replace("{MILESTONE_PCT}", f"{milestone:g}")
-            .replace("{MILESTONE_BONUS}", f"{bonus:g}")
             .replace("{MOON_SLOTS}", str(_ar.MOONSHOT_SLOTS)).replace("{MOON_PCT}", f"{_ar.MOONSHOT_PCT:g}")
             .replace("{MOON_STOP}", f"{_ar.MOONSHOT_MIN_STOP:g}").replace("{MOON_TRAIL}", f"{_ar.MOONSHOT_MIN_TRAIL:g}")
             .replace("{RUNNER_TIERS}", ", ".join(f"+{p:g} at {m:g}x" for m, p in _ar.RUNNER_BONUS)))
@@ -239,9 +243,12 @@ MAX_BUY_FRAC = min(1.0, max(0.01, float(os.environ.get("ARENA_LLM_MAX_BUY_PCT", 
 
 # Same model and rules, different trading style
 PERSONAS = {
-    "degen": ("Degen", "Your style: degen. You hunt fresh launches and fast movers, size up to the full limit when you like a "
-                       "setup, and take profits quickly. You accept that many trades lose; you're looking for the few big "
-                       "runners. You still skip obvious rugs, like tokens whose mint authority is NOT revoked."),
+    "degen": ("Degen", "Your style: degen. You hunt fresh curve coins and fast movers in both lanes, size big when you like a "
+                       "setup, take profits fast and move on. You expect to burn lives; that is what they are for. You still "
+                       "skip the obvious rugs the vetoes leave behind (red rating, creator rug history)."),
+    "ape": ("Ape", "Your style: ape. One conviction coin per life: when you find a curve coin or fresh graduate with real net "
+                   "buying from many wallets, you go in at moonshot size and hold for the multiple, letting the ladder take "
+                   "profits. Each life is a lottery ticket on one coin; when it busts you pick the next."),
     "skeptic": ("Skeptic", "Your style: skeptic. You trade graduates only, never the bonding curve. You assume every coin is a rug until its "
                            "holders, LP lock and flow prove otherwise: no concentrated holders, liquidity that is deep and "
                            "holding, net buying that is real. You size small. You hold cash when nothing passes your checks, "
@@ -289,6 +296,10 @@ CHARACTER = {
                "Fourteen lines, one stop loss."),
     "haiku": ("A tiny sprout that grows fast, speaks little, and is already done deciding while the others are still reading.",
               "Small. Quick. Done."),
+    "haiku-degen": ("Haiku in sunglasses: fresh curve coins, big size, quick profits, and a pocket full of spare lives.",
+                    "Lives are for spending."),
+    "haiku-ape": ("Haiku with a banana and one coin in mind per life, all in and holding for the multiple.",
+                  "One coin. All in."),
     "sonnet-degen": ("Sonnet in sunglasses. Fresh launches, full size, no notes; it would rather be early and wrong than late and right.",
                      "Risk flags are a social construct."),
     "sonnet-skeptic": ("Sonnet with a magnifying glass, convinced every token is a rug until the data begs for mercy.",
@@ -378,29 +389,35 @@ LANE_CAP = 15            # coins per lane on a look
 GRADUATE_WINDOW = 6 * 3600  # graduates stay in their lane this long after migrating
 
 
-def build_lanes(candidates, vetoed, chg_since, now, view=None, structure=None):
+def build_lanes(candidates, vetoed, chg_since, now, view=None, structure=None, pinned=None):
     """Split pump.fun tokens into the two lanes a Claude sees in the pumpfun universe, vetoed ones left out.
     graduates: migrated within GRADUATE_WINDOW, newest first, with minutes_since_graduation.
     curve: still on the bonding curve, fastest-filling over the last 10 minutes first (then the most filled), with
     curve_pct and curve_pct_chg_10m (for a coin tracked under 10 minutes, its fill since tracking began scaled to a
-    10-minute pace; None in its first 2 minutes)."""
+    10-minute pace; None in its first 2 minutes).
+    pinned: tokens a watcher hit woke the agent for. Each lane keeps them past LANE_CAP (appended at the end) and a pinned
+    graduate stays listed past GRADUATE_WINDOW, so the agent always sees the coin it was woken for, unless it is vetoed."""
     v = view if view is not None else {"chg_since": chg_since}
     vetoed = vetoed or {}
+    pinned = set(pinned or ())
     grads, curve = [], []
     for t in candidates:
         if t["address"] in vetoed:
             continue
         pump = t.get("pump") or {}
         if pump.get("graduated"):
-            if now - pump["graduated"] <= GRADUATE_WINDOW:
+            if now - pump["graduated"] <= GRADUATE_WINDOW or t["address"] in pinned:
                 grads.append(t)
         elif t.get("dex") == "pumpfun" or t.get("source") == "pumpfun":
             curve.append(t)
 
+    def capped(rows, addr):  # the first LANE_CAP rows, then any pinned ones past the cap
+        return rows[:LANE_CAP] + [r for r in rows[LANE_CAP:] if addr(r) in pinned]
+
     grads.sort(key=lambda t: t["pump"]["graduated"], reverse=True)
     lanes = {"graduates": [{**_format_candidate(t, v, structure),
                             "minutes_since_graduation": int(max(0, now - t["pump"]["graduated"]) // 60)}
-                           for t in grads[:LANE_CAP]]}
+                           for t in capped(grads, lambda t: t["address"])]}
 
     def curve_row(t):
         pct = float((t.get("pump") or {}).get("curve_pct") or 0)
@@ -411,7 +428,7 @@ def build_lanes(candidates, vetoed, chg_since, now, view=None, structure=None):
         return t, pct, d
     rows = sorted(map(curve_row, curve), key=lambda r: (-(r[2] or 0), -r[1]))
     lanes["curve"] = [{**_format_candidate(t, v, structure), "curve_pct": round(pct, 1), "curve_pct_chg_10m": d}
-                      for t, pct, d in rows[:LANE_CAP]]
+                      for t, pct, d in capped(rows, lambda r: r[0]["address"])]
     return lanes
 
 
@@ -463,6 +480,7 @@ class LLMAgent(Agent):
         self.error = None           # why the last call failed, if it did
         self.ready = None           # (orders, record) from the last answer, handed over on the next tick
         self.wake_reason = None     # set by the arena when an alarm trips
+        self.wake_tokens = set()    # coins a watcher hit woke us for: the next look lists them past the lane cap
 
     def mode(self):
         return self.control.mode_for(self.name) if self.control else "normal"
@@ -592,6 +610,7 @@ class LLMAgent(Agent):
             return orders
         self.thinking_since = self.last_started = time.time()
         state, self.woke, self.wake_reason = self._state(v), self.wake_reason, None
+        self.wake_tokens = set()
         self.job = threading.Thread(target=self._think, args=(state,), daemon=True)
         self.job.start()
         return []
@@ -606,9 +625,10 @@ class LLMAgent(Agent):
         structure = v.get("structure") or {}
         if market.UNIVERSE == "pumpfun":  # two lanes: fresh graduates and coins still on their curve
             listing = build_lanes(v["candidates"], vetoed, v.get("chg_since") or {}, v.get("now") or time.time(),
-                                  view=v, structure=structure)
+                                  view=v, structure=structure, pinned=self.wake_tokens)
         else:
-            cands = sorted((t for t in v["candidates"] if t["address"] not in vetoed), key=lambda t: t["vol_h1"], reverse=True)[:25]
+            cands = sorted((t for t in v["candidates"] if t["address"] not in vetoed), key=lambda t: t["vol_h1"], reverse=True)
+            cands = cands[:25] + [t for t in cands[25:] if t["address"] in self.wake_tokens]
             listing = {"candidates": [_format_candidate(t, v, structure) for t in cands]}
         state = {
             "cash": round(v["cash"], 2),
@@ -885,8 +905,9 @@ class CouncilAgent(LLMAgent):
 # controls, became Graduate and Runner).
 # Run 8 (2026-10-07): pump.fun only, Haiku 5.5 x4 (Graduate, Runner, Skeptic, Shadow) plus Sonnet 5.5 x2 (Graduate,
 # Shadow) to see whether the cheaper model matches the dearer one on the same strategies.
+# Run 8b (2026-10-07, mid-run): two risk-taker Haikus join (Degen, Ape) now that points are the best single life.
 DEFAULT_LINEUP = ("claude-haiku-5-5:graduate,claude-haiku-5-5:runner,claude-haiku-5-5:skeptic,claude-haiku-5-5:shadow,"
-                  "claude-sonnet-5-5:graduate,claude-sonnet-5-5:shadow")
+                  "claude-sonnet-5-5:graduate,claude-sonnet-5-5:shadow,claude-haiku-5-5:degen,claude-haiku-5-5:ape")
 
 
 def build_llm_agents():

@@ -9,20 +9,24 @@ Settings (environment variables, read when the Arena is built):
   ARENA_FAST_EXIT_SECS=10   seconds between fast exit checks inside a tick (0 disables them). Each check costs
                             one DexScreener request per 30 held tokens in the live market and nothing in the mock.
   ARENA_SHADOW_LEADERS=10   how many top wallets a shadow trader follows (its leader set, re-picked every 6 hours).
-  ARENA_LLM_MAX_BUYS_PER_DAY=6, ARENA_LLM_MIN_BUY_USD=50, ARENA_LLM_BUY_COOLDOWN_MIN=30   churn control for Claudes (not bots): at most
+  ARENA_LLM_MAX_BUYS_PER_DAY=0, ARENA_LLM_MIN_BUY_USD=50, ARENA_LLM_BUY_COOLDOWN_MIN=0   churn control for Claudes (not bots): at most
                             this many buys in a rolling 24 hours, none smaller than the minimum, this many minutes between
-                            buys (0 turns a rule off). A refused buy is listed in acct["recent_failures"] with the reason.
+                            buys (0 turns a rule off; since run 8b only the $50 minimum is on). A refused buy is listed in
+                            acct["recent_failures"] with the reason.
 Execution friction (failed transactions, MEV slippage, fees) is configured in exchange.py; Jupiter quotes in
 market.py. A failed transaction trades nothing, costs the network fee, is counted in acct["failed"] and
 listed in acct["recent_failures"], which view() passes to agents as "recent_failures".
 
 Points and lives. Real P&L (score_equity) subtracts every extra stake, so a bust stays a loss there; it is what
 the charts, standings and analytics use. Claudes get ARENA_LIVES=3 lives: under ARENA_BUST_PCT=10 % of the starting
-cash a Claude goes bust, everything it holds is sold and it gets a fresh stake; with no lives left it is out for
-the run. Its POINTS (the game score it is ranked on) are its profit across lives with losses weighted by life
-(ARENA_LIFE_LOSS_WEIGHTS=0.5,0.75,1: a first-life loss counts half), and every time a life first reaches
-+ARENA_MILESTONE_PCT=25 % above where it started (+25, +50, ...) it earns a lost life back, or
-ARENA_MILESTONE_BONUS=10 points with every life intact. Bots and copy bots have one stake, no busts, points = P&L %.
+cash a Claude goes bust, everything it holds is sold and it gets a fresh stake; with no lives left it is out until a
+life comes back. Lives come back one every ARENA_LIFE_REGEN_MIN=60 minutes (0 = never), up to ARENA_LIVES; an out
+Claude that gets one back is back in with a fresh stake. Its POINTS (the game score it is ranked on) are its BEST
+single life (finished or in progress) as % of the starting cash, plus runner bonus points: a bust costs the life and
+nothing else. ARENA_LIFE_LOSS_WEIGHTS, ARENA_MILESTONE_PCT (default 0 = off) and ARENA_MILESTONE_BONUS belonged to the
+legacy (run 8 and earlier) scoring; they are still parsed so old replays import, but no longer add points or lives
+(a milestone, when ARENA_MILESTONE_PCT is set, is only announced). Bots and copy bots have one stake, no busts,
+points = P&L %.
 The strategy room (strategy_room.py) is the Claudes' shared chat about getting better; posts naming a coin are blocked.
 """
 import os
@@ -48,9 +52,11 @@ EXIT_FIELDS = ("stop_loss_pct", "take_profit_pct", "trailing_pct", "wake_down_pc
 SIGNS = {"stop_loss_pct": -1, "take_profit_pct": 1, "trailing_pct": 1, "wake_down_pct": -1, "wake_up_pct": 1}
 LIVES = max(1, int(os.environ.get("ARENA_LIVES", "3") or 3))
 BUST_PCT = float(os.environ.get("ARENA_BUST_PCT", "10") or 10)
+# Legacy scoring (run 8 and earlier), kept importable for old replays; no longer counted (see the module docstring).
 LOSS_WEIGHTS = [float(x) for x in (os.environ.get("ARENA_LIFE_LOSS_WEIGHTS", "0.5,0.75,1") or "1").split(",") if x.strip()] or [1.0]
-MILESTONE_PCT = float(os.environ.get("ARENA_MILESTONE_PCT", "25") or 0)
+MILESTONE_PCT = float(os.environ.get("ARENA_MILESTONE_PCT", "0") or 0)
 MILESTONE_BONUS = float(os.environ.get("ARENA_MILESTONE_BONUS", "10") or 0)
+LIFE_REGEN_MIN = max(0.0, float(os.environ.get("ARENA_LIFE_REGEN_MIN", "60") or 0))  # a lost life comes back after this (0 = never)
 
 
 # Moonshots: each Claude may hold MOONSHOT_SLOTS small positions aimed at runners ("moonshot": true on a buy), at most
@@ -77,11 +83,12 @@ LADDER_TRAIL = [(10.0, 15.0), (5.0, 20.0), (2.0, 30.0)]          # (peak multipl
 TIME_STOP_H = float(os.environ.get("ARENA_TIME_STOP_H", "6") or 6)
 LIQ_EXIT = 0.5          # sell everything when the pool's liquidity falls under half of what it was at entry
 CREATOR_SELL_USD = float(os.environ.get("ARENA_CREATOR_SELL_USD", "100") or 100)
-# Churn control for Claudes (bots are exempt): every round trip costs about 5 % in fees and slippage, so a Claude may make at
-# most MAX_BUYS_PER_DAY buys in any rolling 24 hours, none under MIN_BUY_USD, and must wait BUY_COOLDOWN_MIN minutes between buys.
-MAX_BUYS_PER_DAY = max(0, int(os.environ.get("ARENA_LLM_MAX_BUYS_PER_DAY", "6") or 0))
+# Churn control for Claudes (bots are exempt): a Claude may make at most MAX_BUYS_PER_DAY buys in any rolling 24 hours, none
+# under MIN_BUY_USD, and must wait BUY_COOLDOWN_MIN minutes between buys. 0 turns a rule off; since run 8b (the user's choice)
+# the cap and the cooldown are off by default and only the $50 minimum stays.
+MAX_BUYS_PER_DAY = max(0, int(os.environ.get("ARENA_LLM_MAX_BUYS_PER_DAY", "0") or 0))
 MIN_BUY_USD = max(0.0, float(os.environ.get("ARENA_LLM_MIN_BUY_USD", "50") or 0))
-BUY_COOLDOWN_MIN = max(0.0, float(os.environ.get("ARENA_LLM_BUY_COOLDOWN_MIN", "30") or 0))
+BUY_COOLDOWN_MIN = max(0.0, float(os.environ.get("ARENA_LLM_BUY_COOLDOWN_MIN", "0") or 0))
 SHADOW_LEADERS = int(os.environ.get("ARENA_SHADOW_LEADERS", "10") or 10)  # wallets in a shadow trader's leader set
 
 
@@ -107,13 +114,18 @@ def ladder_text():
             f"creator sells, or if the pool's liquidity falls below half of what it was when you bought.")
 
 
+def regen_text():
+    """'one returns every hour' (or every N minutes), for the bust and life-back texts."""
+    return "one returns every hour" if LIFE_REGEN_MIN == 60 else f"one returns every {LIFE_REGEN_MIN:g} minutes"
+
+
 def ago_text(secs):
     """'just now', '4 min ago', '2.1 h ago'"""
     return "just now" if secs < 45 else f"{secs / 60:.0f} min ago" if secs < 3600 else f"{secs / 3600:.1f} h ago"
 
 
 def loss_weight(life):
-    """How much a loss in life number `life` (1-based) counts toward points."""
+    """How much a loss in life number `life` (1-based) counted toward points under the legacy scoring (unused since run 8b)."""
     return LOSS_WEIGHTS[min(life, len(LOSS_WEIGHTS)) - 1]
 
 
@@ -363,7 +375,8 @@ class Arena:
 
     def check_watch(self, now):
         """The market watcher: every tick, wake Claude agents whose watch rules match a token, or whose
-        held token drops 15% in 5 minutes. Free: no model call unless something matches."""
+        held token drops 15% in 5 minutes. Free: no model call unless something matches. A watcher hit's token goes into
+        agent.wake_tokens, so the look it triggers lists that coin even where the lane cap would drop it."""
         cands = self.market.candidates()
         for name, agent in self.agents.items():
             if agent.kind != "llm" or self.accounts[name].get("out"):
@@ -376,17 +389,20 @@ class Arena:
                     continue
                 if a in held:
                     if t.get("chg_m5", 0) <= -15:
-                        hits.append(f"{t['symbol']}, which you hold, is down {t['chg_m5']:.0f}% in 5 min")
+                        hits.append((f"{t['symbol']}, which you hold, is down {t['chg_m5']:.0f}% in 5 min", None))
                         seen[a] = now
                     continue
                 if rule and (rule["min_chg_5m"] <= t.get("chg_m5", 0) <= rule["max_chg_5m"]
                              and t.get("vol_h1", 0) >= rule["min_vol_1h"] and t.get("liquidity", 0) >= rule["min_liquidity"]
                              and (t.get("age_min") or 0) >= rule["min_age_min"] and t.get("rating") in rule["ratings"]):
-                    hits.append(f"watcher: {t['symbol']} up {t['chg_m5']:.0f}% in 5 min, ${t['vol_h1']:,.0f} 1h volume, "
-                                f"${t['liquidity']:,.0f} liquidity, {t['rating']}")
+                    hits.append((f"watcher: {t['symbol']} up {t['chg_m5']:.0f}% in 5 min, ${t['vol_h1']:,.0f} 1h volume, "
+                                 f"${t['liquidity']:,.0f} liquidity, {t['rating']}", a))
                     seen[a] = now
-            for h in hits[:3]:
+            for h, a in hits[:3]:
                 agent.wake(h)
+                pins = getattr(agent, "wake_tokens", None)
+                if a and pins is not None:  # held coins are in positions already
+                    pins.add(a)
 
     @staticmethod
     def entry_spot(pos):
@@ -407,20 +423,35 @@ class Arena:
         """Real P&L % across all lives (what would have happened to real money)."""
         return (self.score_equity(name) / self.start_cash - 1) * 100
 
-    def points(self, name):
-        """The game score. Bots: their P&L %. Claudes: profit across lives, each life's loss weighted by loss_weight(life)
-        (gains count in full), plus milestone bonus points."""
+    def life_results(self, name):
+        """[(life number, result as % of the starting cash)] for a Claude: every finished life from lives_log, then the
+        life being played now (unless it is out)."""
         acct = self.accounts[name]
+        out = [(life["life"], (life["end"] - life["start"]) / self.start_cash * 100) for life in acct.get("lives_log", [])]
+        if not acct.get("out"):
+            out.append((len(acct.get("busts", [])) + 1,
+                        (self.equity(name) - acct.get("life_start", self.start_cash)) / self.start_cash * 100))
+        return out
+
+    def best_life(self, name):
+        """(life number, % of the starting cash) of a Claude's best single life, finished or in progress."""
+        return max(self.life_results(name), key=lambda r: r[1], default=(1, 0.0))
+
+    def points(self, name):
+        """The game score. Bots: their P&L %. Claudes: their best single life (finished or in progress) as % of the
+        starting cash, plus runner bonus points. A bust costs the life and nothing else; the legacy loss weights and
+        milestone bonus no longer count."""
         if self.agents[name].kind != "llm":
             return self.pnl_pct(name)
-        total = 0.0
-        for life in acct.get("lives_log", []):
-            r = life["result"]
-            total += r if r >= 0 else loss_weight(life["life"]) * r
-        if not acct.get("out"):  # the life being played now
-            r = self.equity(name) - acct.get("life_start", self.start_cash)
-            total += r if r >= 0 else loss_weight(len(acct.get("busts", [])) + 1) * r
-        return total / self.start_cash * 100 + acct.get("bonus", 0.0) + acct.get("runner_bonus", 0.0)
+        return self.best_life(name)[1] + self.accounts[name].get("runner_bonus", 0.0)
+
+    def next_life_in_min(self, name, now):
+        """Minutes until a Claude's next life comes back (0 at full lives, for bots, or with LIFE_REGEN_MIN off)."""
+        info = self.lives_info(name)
+        if not info or not LIFE_REGEN_MIN or info["lives_left"] >= self.lives:
+            return 0
+        last = self.accounts[name].get("life_regen_ts", self.run_started)
+        return max(0, math.ceil(round((last + LIFE_REGEN_MIN * 60 - now) / 60, 2)))
 
     def lives_info(self, name):
         """{"lives", "lives_left", "out", "busts"} for a Claude, None for bots (they have no extra lives)."""
@@ -438,21 +469,21 @@ class Arena:
         info = self.lives_info(name) or {}
         acct = self.accounts[name]
         start = acct.get("life_start", self.start_cash)
-        life = info.get("life", 1)
+        best_no, best_pct = self.best_life(name)
         out = {"points": round(self.points(name), 1), "real_pnl_pct": round(self.pnl_pct(name), 1),
                "rank": next(i for i, r in enumerate(board, 1) if r["name"] == name), "of": len(board),
                "rank_among_claudes": next((i for i, r in enumerate(claudes, 1) if r["name"] == name), None),
-               "claudes": len(claudes), "lives_left": info.get("lives_left"), "life": life,
-               "losses_count_this_life": f"{loss_weight(life):g}x",
-               "this_life_pct": round((self.equity(name) / start - 1) * 100, 1) if start else 0.0,
+               "claudes": len(claudes), "lives_left": info.get("lives_left"), "life": info.get("life", 1),
+               "next_life_in_min": self.next_life_in_min(name, now),
+               # every life % here is of the starting stake, the same basis as points
+               "best_life_pct": round(best_pct, 1), "best_life_no": best_no,
+               "this_life_pct": round((self.equity(name) - start) / self.start_cash * 100, 1),
+               "leader_best_life_pct": round(max((self.best_life(r["name"])[1] for r in claudes), default=best_pct), 1),
                "stake_now": round(self.equity(name), 2), "bust_below": round(self.bust_usd, 2)}
         if MOONSHOT_SLOTS:
             out["moonshots_open"] = f"{sum(1 for p in acct['positions'].values() if p.get('moonshot'))} of {MOONSHOT_SLOTS}"
         if acct.get("runner_bonus"):
             out["runner_bonus_points"] = acct["runner_bonus"]
-        if MILESTONE_PCT > 0:
-            k = len(acct.get("milestones", [])) + 1
-            out["next_milestone"] = f"+{k * MILESTONE_PCT:g}% this life (equity ${start * (1 + k * MILESTONE_PCT / 100):,.0f})"
         ev = self.accounts[name].get("life_event")
         if ev and now - ev["ts"] < 2 * 3600:
             out["life_event"] = ev["text"]
@@ -481,9 +512,14 @@ class Arena:
                 acct["out"] = True
                 acct["life_start"] = left
                 agent.ready = None
-                text = (f"You went bust for the {used}{'st' if used == 1 else 'nd' if used == 2 else 'rd' if used == 3 else 'th'} "
-                        f"time and are out of lives: you are out for the rest of this run.")
-                post = f"{name} went bust again and is out of lives for this run."
+                nth = f"{used}{'st' if used == 1 else 'nd' if used == 2 else 'rd' if used == 3 else 'th'}"
+                if LIFE_REGEN_MIN:
+                    text = (f"You went bust for the {nth} time and are out of lives: you sit out until a life comes back "
+                            f"({regen_text()}), then you are back in with a fresh ${self.start_cash:,.0f} stake.")
+                    post = f"{name} went bust again and is out of lives until one comes back."
+                else:
+                    text = f"You went bust for the {nth} time and are out of lives: you are out for the rest of this run."
+                    post = f"{name} went bust again and is out of lives for this run."
             else:
                 acct["stakes"] = acct.get("stakes", 1) + 1
                 acct["cash"] += self.start_cash
@@ -491,9 +527,10 @@ class Arena:
                 lives_left = self.lives - used + acct.get("hearts", 0)
                 text = (f"You went bust: your equity fell under ${self.bust_usd:,.0f}, so everything you held was sold "
                         f"(${left:,.2f} left). You got a fresh ${self.start_cash:,.0f} stake and have {lives_left} "
-                        f"{'life' if lives_left == 1 else 'lives'} left. That life's loss counts {loss_weight(used):g}x in "
-                        f"your points; losses in your next life count {loss_weight(used + 1):g}x. Take stock of what went "
-                        f"wrong and write it in your journal before you trade again.")
+                        f"{'life' if lives_left == 1 else 'lives'} left"
+                        + (f" ({regen_text()}, up to {self.lives})" if LIFE_REGEN_MIN else "") +
+                        ". The bust costs only the life: your points are your best single life. Take stock of what went "
+                        "wrong and write it in your journal before you trade again.")
                 post = f"{name} went bust and lost a life ({lives_left} left)."
                 agent.wake("you went bust and lost a life; see your_score")
             acct["life_event"] = {"ts": now, "text": text}
@@ -503,8 +540,9 @@ class Arena:
             print(f"[arena] {name} BUST #{used}: ${left:,.2f} left" + ("  -> OUT" if acct.get("out") else f"  -> new ${self.start_cash:,.0f} stake"))
 
     def check_milestones(self, now):
-        """Every time a Claude's current life first reaches +MILESTONE_PCT, +2x, ... above where it started (on
-        liquidation value), it earns a lost life back, or MILESTONE_BONUS points when it has every life."""
+        """Legacy, off by default since run 8b (ARENA_MILESTONE_PCT=0). With ARENA_MILESTONE_PCT set, every time a
+        Claude's current life first reaches +MILESTONE_PCT, +2x, ... above where it started (on liquidation value) it is
+        announced; it no longer earns a life or points (lives come back with time: check_regen)."""
         if MILESTONE_PCT <= 0:
             return
         for name, agent in self.agents.items():
@@ -520,17 +558,44 @@ class Arena:
                 if k in done:
                     continue
                 done.append(k)
-                if self.lives_info(name)["lives_left"] < self.lives:
-                    acct["hearts"] = acct.get("hearts", 0) + 1
-                    what, short = "earned a life back", "earned a life back"
-                else:
-                    acct["bonus"] = acct.get("bonus", 0.0) + MILESTONE_BONUS
-                    what, short = f"earned {MILESTONE_BONUS:g} bonus points (you already have every life)", f"+{MILESTONE_BONUS:g} bonus points"
-                acct["life_event"] = {"ts": now, "text": f"This life reached +{k * MILESTONE_PCT:g}% and you {what}."}
-                agent.wake(f"your life reached +{k * MILESTONE_PCT:g}%: {short}")
+                acct["life_event"] = {"ts": now, "text": f"This life reached +{k * MILESTONE_PCT:g}%."}
                 if strategy_room.ENABLED:
-                    self.db.add_room_post(now, "arena", f"{name} is up {k * MILESTONE_PCT:g}% on this life: {short}.")
-                print(f"[arena] {name} milestone +{k * MILESTONE_PCT:g}%: {short}")
+                    self.db.add_room_post(now, "arena", f"{name} is up {k * MILESTONE_PCT:g}% on this life.")
+                print(f"[arena] {name} milestone +{k * MILESTONE_PCT:g}%")
+
+    def check_regen(self, now):
+        """Lives come back with time: once LIFE_REGEN_MIN minutes have passed since a Claude's last life came back (or
+        since the run started), a Claude under its full lives gets one back. An out Claude that gets one is back in with
+        a fresh stake (counted as another stake in real P&L, like a bust's). Off with ARENA_LIFE_REGEN_MIN=0."""
+        if not LIFE_REGEN_MIN:
+            return
+        for name, agent in self.agents.items():
+            acct = self.accounts[name]
+            if agent.kind != "llm" or self.lives_info(name)["lives_left"] >= self.lives:
+                continue
+            if now - acct.get("life_regen_ts", self.run_started) < LIFE_REGEN_MIN * 60:
+                continue
+            acct["hearts"] = acct.get("hearts", 0) + 1
+            acct["life_regen_ts"] = now
+            if acct.get("out"):
+                acct.pop("out", None)
+                acct["stakes"] = acct.get("stakes", 1) + 1
+                acct["cash"] += self.start_cash
+                acct["exits"], acct["milestones"] = {}, []
+                acct["life_start"] = self.equity(name)
+                text = (f"You got a life back ({regen_text()}): you are back in with a fresh ${self.start_cash:,.0f} stake "
+                        f"and 1 life. Read your journal before you trade again.")
+                agent.wake("you got a life back: you are back in with a fresh stake; see your_score")
+                post = f"{name} got a life back and is back in with a fresh stake."
+            else:
+                text = f"You got a life back ({regen_text()})."
+                agent.wake("you got a life back; see your_score")
+                post = f"{name} got a life back."
+            acct["life_event"] = {"ts": now, "text": text}
+            self.db.save_state(name, acct)
+            if strategy_room.ENABLED:
+                self.db.add_room_post(now, "arena", post)
+            print(f"[arena] {name} got a life back ({self.lives_info(name)['lives_left']} left)")
 
     # ---------- the shadow trader's leader ----------
     def _leader_trades(self, wallet, since):
@@ -1185,6 +1250,7 @@ class Arena:
             self.check_exits(now)
             self.check_managed(now)
             self.check_busts(now)
+            self.check_regen(now)
             self.check_milestones(now)
             self.check_watch(now)
             ready = self.market_ready(now) or now - self.started > 300
