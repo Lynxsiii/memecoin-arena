@@ -22,10 +22,11 @@ class CopyBot(Agent):
     team = "copy"
     max_positions = 8
 
-    def __init__(self, name, lo, hi, avatar, fraction=COPY_FRACTION, window_secs=COPY_WINDOW_SECS):
+    def __init__(self, name, lo, hi, avatar, fraction=COPY_FRACTION, window_secs=COPY_WINDOW_SECS, from_signal_ts=False):
         super().__init__()
         self.name, self.lo, self.hi, self.avatar = name, lo, hi, avatar
         self.fraction, self.window_secs = fraction, window_secs
+        self.from_signal_ts = from_signal_ts  # True: the copy window runs from the leader's trade, not from when we saw it
         self.description = (f"Copies every buy and sell of the traders ranked {lo}-{hi} on the arena's top-100 leaderboard "
                             f"(by profit over the last day): {self.fraction:.0%} of equity per buy, sells when they sell, "
                             f"{SAFETY_STOP_PCT}% safety stop, {TIME_LIMIT_MIN // 60}-hour limit.")
@@ -51,7 +52,7 @@ class CopyBot(Agent):
             self.seen.append(s["id"])
             who = f"#{s['rank']} {s['wallet'][:4]}…{s['wallet'][-4:]}"
             if s["side"] == "buy":
-                self.pending.setdefault(s["mint"], (s, now, who))
+                self.pending.setdefault(s["mint"], (s, (s.get("ts") or now) if self.from_signal_ts else now, who))
                 continue
             waiting = self.pending.get(s["mint"])
             if waiting and waiting[0]["wallet"] == s["wallet"]:
@@ -90,7 +91,7 @@ def build_copy_bots():
 
 def build_copy_top10():
     """Mechanical yardstick for Shadow: copies the 10 best wallets of the realized-profit leaderboard, quickly and big."""
-    b = CopyBot("Copy Top 10", 1, 10, "copy-a", fraction=0.10, window_secs=60)
+    b = CopyBot("Copy Top 10", 1, 10, "copy-a", fraction=0.10, window_secs=60, from_signal_ts=True)
     b.description = (f"Copies every buy and sell of the top 10 wallets on the arena's leaderboard, ranked by realized "
                      f"profit over the last two days: {b.fraction:.0%} of equity per buy within {b.window_secs}s of their "
                      f"buy, sells when they sell, {SAFETY_STOP_PCT}% safety stop, {TIME_LIMIT_MIN // 60}-hour limit.")

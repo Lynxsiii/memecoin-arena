@@ -130,10 +130,7 @@ Post at most once per look, and only when you have something useful to add.
 
 What each look shows you:
 {UNIVERSE_TEXT}
-- source (on a candidate): where the arena found it. "promoted" (its team paid DexScreener for a listing or boost),
-  "organic" (trending on its own on GeckoTerminal), "both", "pumpfun" (a fresh pump.fun launch still on its bonding
-  curve: brand new, thin and the riskiest of all), "graduated" (finished its pump.fun curve and moved to a PumpSwap
-  pool) or "copy" (added because a top trader bought it). sources lists every place it showed up. holders: share of
+{SOURCE_TEXT} sources lists every place it showed up. holders: share of
   supply held by the top 1 and top 10 wallets (pool accounts excluded), the creator and insider networks, how much of
   the liquidity is locked or burned, and RugCheck's risk score (0-100, higher is riskier).
 - positions: what you hold, with its exits and price_chg_pct (market price vs your average entry).
@@ -148,7 +145,7 @@ What each look shows you:
 
 Rules:
 - {SIZE_RULE} At most 8 open positions.
-- Orders fill shortly after you answer (usually within a minute), at whatever the price is then.
+{BUY_RATION_TEXT}- Orders fill shortly after you answer (usually within a minute), at whatever the price is then.
 - next_check_min is when you want to look again, from {MIN_CHECK} to {MAX_CHECK} minutes;
   look every minute if the market calls for it. Between looks only your exits, the exit ladder, your alarms and the
   watcher act for you.
@@ -177,7 +174,8 @@ UNIVERSE_TEXT_PUMPFUN = """- graduates: pump.fun coins that graduated to PumpSwa
   most 15), each with minutes_since_graduation and its "structure".
 - curve: pump.fun coins still on their bonding curve that passed the vetoes (at most 15), the fastest-filling first.
   curve_pct is how far the curve has filled (0-100); curve_pct_chg_10m is how much it filled in the last 10 minutes
-  (null until the arena has 10 minutes of history on the coin).
+  (for a coin tracked under 10 minutes, its fill since tracking began scaled to a 10-minute pace; null in its first 2
+  minutes).
 - chg_since (on both lists) is the price change from 2, 5, 10, 20 and 30 minutes ago to now, from the arena's own
   30-second price history, and swing_30m its noise level. A coin you hold stays in positions after it leaves both lists.
 - pump.fun: every coin in this arena is a pump.fun coin. A new coin trades on a bonding curve; the curve fills at about
@@ -185,12 +183,34 @@ UNIVERSE_TEXT_PUMPFUN = """- graduates: pump.fun coins that graduated to PumpSwa
   Most graduates lose most of their value within 20 minutes of migrating, and the first minute after a launch or a
   migration is the snipers' exit. Fees: the {FEE_TEXT} on each side, plus the pool fee and price impact."""
 
+# The candidate "source" line, by universe. pumpfun mode never shows the promoted/organic/both sources.
+SOURCE_TEXT_ALL = """- source (on a candidate): where the arena found it. "promoted" (its team paid DexScreener for a listing or boost),
+  "organic" (trending on its own on GeckoTerminal), "both", "pumpfun" (a fresh pump.fun launch still on its bonding
+  curve: brand new, thin and the riskiest of all), "graduated" (finished its pump.fun curve and moved to a PumpSwap
+  pool) or "copy" (added because a top trader bought it)."""
+SOURCE_TEXT_PUMPFUN = """- source (on a candidate): "pumpfun" (still on its bonding curve), "graduated" (moved to PumpSwap) or "copy"
+  (added because a top wallet bought it)."""
+
+
+def buy_ration_text(ar):
+    """The Rules line for the churn rules (arena.MAX_BUYS_PER_DAY, MIN_BUY_USD, BUY_COOLDOWN_MIN); empty when all are off."""
+    parts = ([f"at most {ar.MAX_BUYS_PER_DAY} buys per rolling 24 hours"] if ar.MAX_BUYS_PER_DAY else []) + \
+            ([f"at least ${ar.MIN_BUY_USD:g} each"] if ar.MIN_BUY_USD else []) + \
+            ([f"{ar.BUY_COOLDOWN_MIN:g} minutes between buys"] if ar.BUY_COOLDOWN_MIN else [])
+    if not parts:
+        return ""
+    rule = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + ", and " + parts[-1]
+    return (f"- Buys are rationed: {rule};\n  a refused buy shows in recent_failures with the rule. buy_budget shows the "
+            f"buys you have left and the minutes until\n  you may buy again. Spend them on your best setups.\n")
+
 
 def fill_brief(text, min_check, max_check):
     """Fill the brief's placeholders: look interval, journal size, fees and costs, lives and the bust line."""
     import arena as _ar  # the moonshot and runner settings live with the rules that enforce them
     universe = UNIVERSE_TEXT_PUMPFUN if market.UNIVERSE == "pumpfun" else UNIVERSE_TEXT_ALL
     text = text.replace("{UNIVERSE_TEXT}", universe)  # first: the pump.fun text carries {FEE_TEXT}
+    text = text.replace("{SOURCE_TEXT}", SOURCE_TEXT_PUMPFUN if market.UNIVERSE == "pumpfun" else SOURCE_TEXT_ALL)
+    text = text.replace("{BUY_RATION_TEXT}", buy_ration_text(_ar))
     lives = max(1, int(os.environ.get("ARENA_LIVES", "3") or 3))
     bust = float(os.environ.get("ARENA_BUST_PCT", "10") or 10)
     weights = [float(x) for x in (os.environ.get("ARENA_LIFE_LOSS_WEIGHTS", "0.5,0.75,1") or "1").split(",") if x.strip()] or [1.0]
@@ -334,7 +354,8 @@ def _format_candidate(t, v, structure):
     """One market token as a Claude sees it on a look. v is the agent's view (chg_since, token_history);
     optional token keys (chg_h24, age_min, flags, rating) may be missing."""
     a = t["address"]
-    chg = {k: x for k, x in ((v.get("chg_since") or {}).get(a) or {}).items() if k != "curve_pct_10m"}
+    chg = {k: x for k, x in ((v.get("chg_since") or {}).get(a) or {}).items()
+           if k not in ("curve_pct_10m", "curve_pct_10m_secs")}
     return {
         "token": a, "symbol": t["symbol"], "price": t["price"],
         "liquidity": round(t["liquidity"]), "mcap": round(t["mcap"]),
@@ -361,7 +382,8 @@ def build_lanes(candidates, vetoed, chg_since, now, view=None, structure=None):
     """Split pump.fun tokens into the two lanes a Claude sees in the pumpfun universe, vetoed ones left out.
     graduates: migrated within GRADUATE_WINDOW, newest first, with minutes_since_graduation.
     curve: still on the bonding curve, fastest-filling over the last 10 minutes first (then the most filled), with
-    curve_pct and curve_pct_chg_10m (None until there are 10 minutes of curve history)."""
+    curve_pct and curve_pct_chg_10m (for a coin tracked under 10 minutes, its fill since tracking began scaled to a
+    10-minute pace; None in its first 2 minutes)."""
     v = view if view is not None else {"chg_since": chg_since}
     vetoed = vetoed or {}
     grads, curve = [], []
@@ -382,8 +404,11 @@ def build_lanes(candidates, vetoed, chg_since, now, view=None, structure=None):
 
     def curve_row(t):
         pct = float((t.get("pump") or {}).get("curve_pct") or 0)
-        past = (chg_since.get(t["address"]) or {}).get("curve_pct_10m")
-        return t, pct, (round(pct - past, 1) if past is not None else None)
+        cs = chg_since.get(t["address"]) or {}
+        past, secs = cs.get("curve_pct_10m"), cs.get("curve_pct_10m_secs") or 600
+        # a coin tracked under 10 minutes: its fill since tracking began, scaled to a 10-minute pace
+        d = round((pct - past) * 600 / min(600, max(105, secs)), 1) if past is not None else None
+        return t, pct, d
     rows = sorted(map(curve_row, curve), key=lambda r: (-(r[2] or 0), -r[1]))
     lanes["curve"] = [{**_format_candidate(t, v, structure), "curve_pct": round(pct, 1), "curve_pct_chg_10m": d}
                       for t, pct, d in rows[:LANE_CAP]]
@@ -606,6 +631,7 @@ class LLMAgent(Agent):
             **({"your_score": v["your_score"]} if v.get("your_score") else {}),
             **({"strategy_room": v["strategy_room"]} if v.get("strategy_room") is not None else {}),
             **({"your_leaders": v["your_leaders"]} if v.get("your_leaders") else {}),
+            **({"buy_budget": v["buy_budget"]} if v.get("buy_budget") else {}),
             "your_watch": self.watch,
             "your_journal": {str(i): s for i, s in enumerate(self.get_journal(), 1)},
             "recent_failures": [f["text"] for f in v.get("recent_failures", []) if isinstance(f, dict) and f.get("text")],

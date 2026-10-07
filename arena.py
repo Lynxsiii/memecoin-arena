@@ -28,6 +28,7 @@ The strategy room (strategy_room.py) is the Claudes' shared chat about getting b
 import os
 import random
 import json
+import math
 import os
 import threading
 import time
@@ -82,6 +83,15 @@ MAX_BUYS_PER_DAY = max(0, int(os.environ.get("ARENA_LLM_MAX_BUYS_PER_DAY", "6") 
 MIN_BUY_USD = max(0.0, float(os.environ.get("ARENA_LLM_MIN_BUY_USD", "50") or 0))
 BUY_COOLDOWN_MIN = max(0.0, float(os.environ.get("ARENA_LLM_BUY_COOLDOWN_MIN", "30") or 0))
 SHADOW_LEADERS = int(os.environ.get("ARENA_SHADOW_LEADERS", "10") or 10)  # wallets in a shadow trader's leader set
+
+
+def _rank_rule():
+    """The top-trader leaderboard's ranking rule (traders.RANK: "pnl" or "realized"); "pnl" without traders.py."""
+    try:
+        import traders
+    except ImportError:
+        return "pnl"
+    return traders.RANK
 
 
 def ladder_text():
@@ -234,13 +244,16 @@ class Arena:
 
     def chg_since(self, addr, now):
         """Price change (%) from 2, 5, 10, 20 and 30 minutes ago to now, from the arena's own price history.
-        For a pump.fun coin still on its curve, also curve_pct_10m: its curve_pct about 10 minutes ago."""
+        For a pump.fun coin still on its curve, also curve_pct_10m: its curve_pct about 10 minutes ago (or, tracked under
+        10 minutes, its oldest point if that is at least ~2 minutes back), and curve_pct_10m_secs: how long ago that was."""
         out = {}
         ch = getattr(self, "curve_history", {}).get(addr)
         if ch:
-            past = next((c for ts, c in reversed(ch) if now - ts >= 600 - 15), None)
-            if past is not None:
-                out["curve_pct_10m"] = past
+            ref = next(((ts, c) for ts, c in reversed(ch) if now - ts >= 600 - 15), None)
+            if ref is None and now - ch[0][0] >= 120 - 15:
+                ref = ch[0]  # tracked under 10 minutes: its oldest point, at least ~2 minutes back
+            if ref is not None:
+                out["curve_pct_10m"], out["curve_pct_10m_secs"] = ref[1], round(now - ref[0])
         h = self.history.get(addr)
         if not h or len(h) < 2:
             return out
@@ -315,7 +328,8 @@ class Arena:
                                                         f"{r['days']} days and {r['closed_trades']} closed trades: beats {names} "
                                                         f"after the luck check at {r['confidence'] * 100:.0f}% confidence, drawdown "
                                                         f"under {r['max_drawdown_pct']}%, profit factor over {r['profit_factor']}. "
-                                                        f"Roster stays fixed until then.")
+                                                        f"Roster stays fixed until then. Roster: "
+                                                        + ", ".join(n for n, a in self.agents.items() if a.kind == "llm") + ".")
                 except Exception as e:  # the rule post is a courtesy; it must never break a reset
                     print(f"[arena] verdict post failed: {e}")
             self.news = (now, f"Every agent was reset to ${self.start_cash:,.0f} at {time.strftime('%H:%M', time.localtime(now))}; "
@@ -555,7 +569,8 @@ class Arena:
         if kept and now - cur.get("picked", 0) < 6 * 3600 and 2 * len(kept) >= len(saved):
             return [{**t, "picked": cur["picked"]} for t in kept]
         fresh = lambda t: now - (t.get("last_trade_ts") or 0) < 6 * 3600
-        good = [t for t in top.values() if (t.get("pnl_usd") or 0) > 0 and (t.get("tokens") or 0) >= 3
+        profit = "realized_usd" if _rank_rule() == "realized" else "pnl_usd"  # same profit the leaderboard ranks by
+        good = [t for t in top.values() if (t.get(profit) or 0) > 0 and (t.get("tokens") or 0) >= 3
                 and (t.get("flips") or 0) <= 1 and 6 <= (t.get("trades") or 0) <= 150 and fresh(t)]
         pool = good or [t for t in top.values() if fresh(t)]
         if not pool:
@@ -618,7 +633,8 @@ class Arena:
                     "sold_usd": round(h["sold_usd"]), "last_buy_min_ago": round((now - h["last_ts"]) / 60)}
                    for h in sorted(last.values(), key=lambda h: -h["last_ts"]) if h["last"] == "buy"][:5]
         return {"wallet": self._short_wallet(w), "rank": lead.get("rank"),
-                "record_48h": {k: lead.get(k) for k in ("pnl_usd", "roi_pct", "win_rate", "trades", "tokens", "volume_usd")},
+                "record_48h": {k: lead.get(k) for k in ("pnl_usd", *(("realized_usd",) if _rank_rule() == "realized" else ()),
+                                                        "roi_pct", "win_rate", "trades", "tokens", "volume_usd")},
                 "latest_trades": [{"min_ago": round((now - t["ts"]) / 60, 1), "side": t["side"], "symbol": t["symbol"],
                                    "token": t["token"], "usd": round(t["usd"]), "seen_via": t["source"],
                                    **({"skip_reasons": why} if (why := self._shadow_skip(t, trades, now)) else {})}
@@ -763,11 +779,13 @@ class Arena:
             })
         # Failed transactions from the last hour, newest last, so an agent can see "your buy of X failed".
         failures = [f for f in acct.get("recent_failures", []) if now - f["ts"] < 3600][-5:]
+        budget = self.buy_budget(name, now) if self.agents[name].kind == "llm" else None
         return {"now": now, "cash": acct["cash"], "equity": self.equity(name), "score_equity": self.score_equity(name),
                 "points": self.points(name), "pnl_pct": self.pnl_pct(name), "lives": self.lives_info(name), "positions": positions,
                 "vetoes": self.vetoes,
                 "candidates": self.market.candidates(), "recent_sells": acct["recent_sells"],
-                "failed": acct.get("failed", 0), "recent_failures": failures}
+                "failed": acct.get("failed", 0), "recent_failures": failures,
+                **({"buy_budget": budget} if budget else {})}  # Claudes only: buys left under the churn rules
 
     # ---------- order handling ----------
     def validate(self, agent, o, view):
@@ -833,11 +851,8 @@ class Arena:
         what = f"your buy of {symbol} (${usd:.0f}) was refused"
         if MIN_BUY_USD and usd < MIN_BUY_USD:
             return f"{what}: under the ${MIN_BUY_USD:.0f} minimum"
-        with self.db.lock:
-            n, last = self.db.conn.execute("SELECT COUNT(*), MAX(ts) FROM trades WHERE agent=? AND side='buy' AND ts>=?",
-                                           (name, now - 86400)).fetchone()
-        queued = sum(1 for n2, x in self.pending if n2 == name and x.get("action") == "buy")
-        n += queued
+        times, queued = self._recent_buys(name, now)
+        n, last = len(times) + queued, (times[-1] if times else None)
         if MAX_BUYS_PER_DAY and n >= MAX_BUYS_PER_DAY:
             return f"{what}: {n} buys in the last 24 hours (limit {MAX_BUYS_PER_DAY})"
         if BUY_COOLDOWN_MIN and queued:
@@ -845,6 +860,33 @@ class Arena:
         if BUY_COOLDOWN_MIN and last is not None and now - last < BUY_COOLDOWN_MIN * 60:
             return f"{what}: {(now - last) / 60:.0f} minutes since your last buy ({BUY_COOLDOWN_MIN:g} minute cooldown)"
         return None
+
+    def _recent_buys(self, name, now):
+        """(timestamps of the agent's filled buys in the last 24 hours, oldest first; number of buys queued for the next fill)."""
+        with self.db.lock:
+            times = [r[0] for r in self.db.conn.execute("SELECT ts FROM trades WHERE agent=? AND side='buy' AND ts>=? "
+                                                        "ORDER BY ts", (name, now - 86400)).fetchall()]
+        return times, sum(1 for n2, x in self.pending if n2 == name and x.get("action") == "buy")
+
+    def buy_budget(self, name, now):
+        """What a Claude has left under the churn rules: {"buys_left_24h", "next_buy_in_min"} (None when the rules are off).
+        next_buy_in_min is 0 when a buy would pass the cap and the cooldown now; buys_left_24h is None when there is no cap."""
+        if not (MAX_BUYS_PER_DAY or BUY_COOLDOWN_MIN):
+            return None
+        times, queued = self._recent_buys(name, now)
+        n = len(times) + queued
+        wait = 0.0
+        if BUY_COOLDOWN_MIN:
+            if queued:
+                wait = BUY_COOLDOWN_MIN * 60
+            elif times:
+                wait = max(0.0, BUY_COOLDOWN_MIN * 60 - (now - times[-1]))
+        if MAX_BUYS_PER_DAY and n >= MAX_BUYS_PER_DAY:
+            k = n - MAX_BUYS_PER_DAY  # this many of the oldest buys must age out before the next one fits
+            if k < len(times):
+                wait = max(wait, times[k] + 86400 - now)
+        return {"buys_left_24h": max(0, MAX_BUYS_PER_DAY - n) if MAX_BUYS_PER_DAY else None,
+                "next_buy_in_min": math.ceil(round(wait / 60, 2))}
 
     def _refuse(self, name, o, text, now):
         """Records a refused buy in the agent's recent_failures (shown back to it by view()) and returns None."""

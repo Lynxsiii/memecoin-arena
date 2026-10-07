@@ -6,12 +6,6 @@ import time
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
-from agents import build_agents
-from arena import Arena
-from db import DB
-from market import LiveMarket, MockMarket
-from usage import UsageControl
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -23,6 +17,16 @@ def load_dotenv():
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip().strip('"'))
+
+
+# Before the project imports: market, exchange, arena and claude_agents read their settings from os.environ once, at import.
+load_dotenv()
+
+from agents import build_agents  # noqa: E402
+from arena import Arena  # noqa: E402
+from db import DB  # noqa: E402
+from market import LiveMarket, MockMarket  # noqa: E402
+from usage import UsageControl  # noqa: E402
 
 
 def max_drawdown(series):
@@ -268,6 +272,15 @@ def main():
     except ImportError:
         pass
     db = DB(db_path)
+    import exchange
+    import market as market_mod
+    try:
+        import traders
+        rank = traders.RANK
+    except ImportError:
+        rank = "n/a"
+    print(f"[main] mode: universe={market_mod.UNIVERSE} route={exchange.ROUTE} rank={rank} "
+          f"max_tracked={getattr(market, 'max_tracked', 'n/a')}")
     arena = Arena(market, db, build_agents(), start_cash=args.cash, tick=args.tick)
     if arena.memory and not args.mock:  # warm up market memory from the last day of recordings
         try:

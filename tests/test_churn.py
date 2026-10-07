@@ -89,3 +89,20 @@ def test_env_names(monkeypatch):
         monkeypatch.undo()
         importlib.reload(arena)
     assert (arena.MIN_BUY_USD, arena.MAX_BUYS_PER_DAY, arena.BUY_COOLDOWN_MIN) == (50.0, 6, 30.0)
+
+
+def test_view_buy_budget_counts_buys(arena_llm):
+    _, _, view = arena_llm(buys_today=4)
+    assert view["buy_budget"]["buys_left_24h"] == 2
+
+
+def test_view_buy_budget_cooldown(arena_llm):
+    _, _, view = arena_llm(last_buy_min_ago=12)
+    assert view["buy_budget"] == {"buys_left_24h": 5, "next_buy_in_min": 18}
+
+
+def test_view_buy_budget_free_and_bots(arena_llm):
+    _, _, view = arena_llm()
+    assert view["buy_budget"] == {"buys_left_24h": 6, "next_buy_in_min": 0}
+    _, _, bot_view = arena_llm(bot=True)
+    assert "buy_budget" not in bot_view

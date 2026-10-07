@@ -96,3 +96,14 @@ def test_buy_following_stores_copied_wallet(arena_with_stub_tracker, monkeypatch
         assert o is not None
         a.execute("Haiku Shadow", o, _NOW)
         assert a.accounts["Haiku Shadow"]["positions"][tok].get("copied_wallet") == expect
+
+
+def test_realized_rule_filters_leaders_on_realized(arena_with_stub_tracker, monkeypatch):
+    import traders
+    monkeypatch.setattr(traders, "RANK", "realized")
+    bag = {**_leader(1, last_trade=_NOW - 60), "pnl_usd": 5000.0, "realized_usd": -200.0}
+    pro = {**_leader(2, last_trade=_NOW - 60), "pnl_usd": -100.0, "realized_usd": 800.0}
+    a = arena_with_stub_tracker(top=[bag, pro])
+    assert [l["rank"] for l in a.shadow_leaders("Haiku Shadow", _NOW)] == [2]
+    monkeypatch.setattr(arena.Arena, "_leader_trades", lambda self, wallet, since: [])
+    assert a.leader_view("Haiku Shadow", _NOW)["leaders"][0]["record_48h"]["realized_usd"] == 800.0

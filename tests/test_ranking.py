@@ -54,3 +54,25 @@ def test_realized_rule_losing_gate_reads_realized():
     stats = {"hurt": _st("hurt", 900, -1000, 6, 60, 4)}
     assert [s["wallet"] for s in rank_wallets(stats, 10, rule="realized")] == ["hurt"]
     assert rank_wallets(stats, 10, rule="pnl") == []
+
+
+def _sig(i, ts, side="buy", rank=3):
+    return {"id": i, "ts": ts, "wallet": "W" * 44, "rank": rank, "side": side, "mint": "M1pump", "symbol": "M1", "usd": 500.0}
+
+
+def _copy_view(now, tradable=()):
+    return {"now": now, "positions": [], "equity": 1000.0, "candidates": [{"address": a} for a in tradable], "copy_signals": []}
+
+
+def test_copy_top10_window_runs_from_leader_trade():
+    from copy_agents import build_copy_bots, build_copy_top10
+    now = 1_000_000
+    top10, old = build_copy_top10(), build_copy_bots()[0]
+    for b in (top10, old):  # a 90-second-old leader buy, first seen now, token not priced yet
+        b.decide({**_copy_view(now), "copy_signals": [_sig(1, now - 90)]})
+    assert top10.pending == {}  # past its 60 s window already
+    assert "M1pump" in old.pending  # retired bots still time from when they saw it
+    fresh = build_copy_top10()
+    fresh.decide({**_copy_view(now), "copy_signals": [_sig(2, now - 20)]})
+    orders = fresh.decide(_copy_view(now + 30, tradable=["M1pump"]))
+    assert [o["action"] for o in orders] == ["buy"]

@@ -97,3 +97,60 @@ def test_chg_since_reports_curve_pct_10m():
     a.curve_history = {"C1pump": deque([(now - 30 * i, 50.0 - i) for i in range(25, -1, -1)], maxlen=130)}
     out = a.chg_since("C1pump", now)
     assert out["curve_pct_10m"] == 30.0  # 20 points of 30s back = 10 minutes ago
+    assert out["curve_pct_10m_secs"] == 600
+
+
+def test_fresh_curve_coin_gets_paced_momentum():
+    """A coin tracked for 4 minutes that went 20 -> 30 fills at a 25-point 10-minute pace and outranks +5 over 10 min."""
+    import arena
+    a = arena.Arena.__new__(arena.Arena)
+    now = 10_000
+    a.history = {}
+    a.curve_history = {
+        "NEWpump": deque([(now - 30 * i, 30.0 - 10.0 * i / 8) for i in range(8, -1, -1)], maxlen=130),
+        "OLDpump": deque([(now - 30 * i, 55.0 - 5.0 * i / 20) for i in range(25, -1, -1)], maxlen=130),
+    }
+    chg = {addr: a.chg_since(addr, now) for addr in a.curve_history}
+    assert chg["NEWpump"] == {"curve_pct_10m": 20.0, "curve_pct_10m_secs": 240}
+    assert chg["OLDpump"]["curve_pct_10m_secs"] == 600
+    toks = [_tok("OLDpump", dex="pumpfun", pump={"curve_pct": 55.0}), _tok("NEWpump", dex="pumpfun", pump={"curve_pct": 30.0})]
+    lanes = build_lanes(toks, vetoed={}, chg_since=chg, now=now)
+    assert [t["token"] for t in lanes["curve"]] == ["NEWpump", "OLDpump"]
+    assert lanes["curve"][0]["curve_pct_chg_10m"] == 25.0 and lanes["curve"][1]["curve_pct_chg_10m"] == 5.0
+    assert "curve_pct_10m" not in lanes["curve"][0]["chg_since"] and "curve_pct_10m_secs" not in lanes["curve"][0]["chg_since"]
+
+
+def test_curve_coin_under_two_minutes_has_no_momentum():
+    import arena
+    a = arena.Arena.__new__(arena.Arena)
+    now = 10_000
+    a.history = {}
+    a.curve_history = {"NEWpump": deque([(now - 90, 10.0), (now - 60, 12.0), (now, 15.0)], maxlen=130)}
+    assert a.chg_since("NEWpump", now) == {}
+
+
+def test_brief_source_text_by_universe(monkeypatch):
+    monkeypatch.setattr(market, "UNIVERSE", "pumpfun")
+    pf = fill_brief(LLM_SYSTEM, 1, 60)
+    assert '"promoted"' not in pf and '"organic"' not in pf
+    assert '"graduated" (moved to PumpSwap)' in pf and "{" + "SOURCE_TEXT}" not in pf
+    assert "scaled to a 10-minute pace" in pf
+    monkeypatch.setattr(market, "UNIVERSE", "all")
+    al = fill_brief(LLM_SYSTEM, 1, 60)
+    assert '"promoted" (its team paid DexScreener' in al
+
+
+def test_brief_states_buy_rations(monkeypatch):
+    import arena
+    monkeypatch.setattr(arena, "MAX_BUYS_PER_DAY", 6)
+    monkeypatch.setattr(arena, "MIN_BUY_USD", 50.0)
+    monkeypatch.setattr(arena, "BUY_COOLDOWN_MIN", 30.0)
+    b = fill_brief(LLM_SYSTEM, 1, 60)
+    assert "at most 6 buys per rolling 24 hours, at least $50 each, and 30 minutes between buys" in b
+
+
+def test_state_passes_buy_budget(monkeypatch):
+    monkeypatch.setattr(market, "UNIVERSE", "all")
+    agent = LLMAgent(_Backend())
+    v = {**_view([], []), "buy_budget": {"buys_left_24h": 2, "next_buy_in_min": 18}}
+    assert agent._state(v)["buy_budget"] == {"buys_left_24h": 2, "next_buy_in_min": 18}
