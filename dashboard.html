@@ -1,0 +1,1384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memecoin Arena</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jersey+10&family=Rubik:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --night: #16122e;      /* page */
+    --dusk: #1f1a40;       /* panels */
+    --seam: #342c63;       /* lines */
+    --moon: #eeeafb;       /* text */
+    --haze: #a39dcb;       /* secondary text */
+    --ink: #1b1640;        /* text on light */
+    --profit: #59e3a7;
+    --loss: #ff6b7a;
+    --gold: #f7c548;
+    --pixel: "Jersey 10", "Rubik", system-ui, sans-serif;
+    --body: "Rubik", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--night); }
+  body { margin: 0; background: var(--night); color: var(--moon); font: 15px/1.5 var(--body); }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 0 20px; }
+  :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+  /* ---------- header ---------- */
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 16px 0 14px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand .coin { width: 28px; height: 28px; flex: none; image-rendering: pixelated; animation: spin 2.4s steps(6) infinite; }
+  h1 { font: 400 38px/1 var(--pixel); margin: 0; letter-spacing: .02em; text-shadow: 3px 3px 0 var(--ink); }
+  h1 em { font-style: normal; color: var(--gold); }
+  @keyframes spin { 0% { transform: scaleX(1); } 50% { transform: scaleX(.15); } 100% { transform: scaleX(1); } }
+  .mode { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--moon);
+          padding: 4px 10px; background: var(--dusk); border: 1px solid var(--seam); border-radius: 3px; }
+  .mode i { width: 8px; height: 8px; background: var(--profit); box-shadow: 0 0 6px var(--profit); }
+  .mode.mock i { background: var(--gold); box-shadow: 0 0 6px var(--gold); }
+  .statusbar { display: inline-flex; }
+  .statusbar:empty { display: none; }
+  .meta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--haze); margin-left: auto; }
+  .meta b { color: var(--moon); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .nav { display: flex; gap: 6px; }
+  .nav a { font: 500 13px/1 var(--body); color: var(--gold); text-decoration: none; padding: 6px 10px; border: 1px solid var(--seam);
+           background: var(--dusk); border-radius: 3px; display: inline-flex; align-items: center; gap: 6px; }
+  .nav a::before { content: ""; width: 6px; height: 6px; background: var(--gold); }
+  .nav a:hover { border-color: var(--gold); }
+  .tb-btn { font: 500 13px/1 var(--body); color: var(--moon); background: var(--dusk); border: 1px solid var(--seam);
+            padding: 6px 10px; border-radius: 3px; cursor: pointer; }
+  .tb-btn:hover { border-color: var(--haze); }
+  .tb-btn[aria-pressed="true"] { border-color: var(--gold); background: #2a2350; }
+
+  /* settings menu: every display and sound toggle (plugins append them to #toolbar) and Reset money, out of the way */
+  .settings { position: relative; }
+  .set-btn { display: inline-flex; align-items: center; gap: 7px; }
+  .set-btn svg { width: 14px; height: 14px; flex: none; }
+  .set-btn[aria-expanded="true"] { border-color: var(--gold); color: var(--gold); }
+  .set-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 70; width: 250px; padding: 12px; background: var(--dusk);
+               border: 1px solid var(--seam); border-radius: 3px; box-shadow: 0 10px 28px rgba(0, 0, 0, .5); }
+  .set-panel[hidden] { display: none; }
+  .set-h { font: 400 22px/1 var(--pixel); color: var(--moon); margin: 0 0 10px; }
+  .set-note { color: var(--haze); font-size: 12px; margin: 10px 0 0; }
+  .toolbar { display: flex; flex-direction: column; gap: 4px; }
+  #toolbar > button { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; text-align: left; order: 3;
+                      font: 500 13px/1 var(--body); color: var(--moon); background: var(--night); border: 1px solid var(--seam);
+                      border-radius: 3px; padding: 9px 10px; cursor: pointer; clip-path: none; }
+  #toolbar > button:hover { border-color: var(--haze); }
+  #toolbar > button::before { content: none !important; }
+  #toolbar .al-dot { display: none; }   /* the On / Off label replaces the alerts plugin's own dot */
+  #toolbar > button[aria-pressed]::after { content: "Off"; font: 400 17px/1 var(--pixel); color: var(--haze); }
+  #toolbar > button[aria-pressed="true"]::after { content: "On"; color: var(--gold); }
+  #toolbar > button:disabled { opacity: .5; cursor: not-allowed; }
+  #toolbar > .tk-btn { order: 1; } #toolbar > .fx-btn { order: 2; } #toolbar > .crt-btn { order: 3; }
+  #toolbar > .cm-btn { order: 4; } #toolbar > .al-btn { order: 5; }
+  #toolbar > #rs-btn { order: 99; margin-top: 10px; color: var(--loss); border-color: rgba(255, 107, 122, .45); }
+  #toolbar > #rs-btn:hover { border-color: var(--loss); }
+
+  /* ---------- CRT scanlines (toolbar toggle, off by default) ---------- */
+  body.crt::after { content: ""; position: fixed; inset: 0; z-index: 9999; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(0, 0, 0, .18) 0 1px, transparent 1px 3px),
+                radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, .35) 100%); }
+  body.crt .wrap, body.crt #slot-top { text-shadow: 0 0 1px rgba(238, 234, 251, .25); }
+
+  /* ---------- stage ---------- */
+  .stage { position: relative; height: 420px; overflow: hidden;
+           background: linear-gradient(180deg, #110d27 0%, #1d1747 55%, #2d2364 100%);
+           clip-path: polygon(0 8px, 8px 8px, 8px 0, calc(100% - 8px) 0, calc(100% - 8px) 8px, 100% 8px, 100% calc(100% - 8px),
+                              calc(100% - 8px) calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 8px calc(100% - 8px), 0 calc(100% - 8px)); }
+  .stage svg.sky, .stage svg.skyline { position: absolute; left: 0; width: 100%; pointer-events: none; }
+  .stage svg.sky { top: 0; height: 60%; }
+  .stage svg.skyline { bottom: 30px; height: 170px; }
+  .floor { position: absolute; left: 0; right: 0; bottom: 0; height: 30px; border-top: 4px solid #463b8c;
+           background: repeating-conic-gradient(#231c4f 0 25%, #2a2259 0 50%) 0 0 / 20px 20px; }
+  /* three teams face off: Team Claude, "vs", Team Bots, "vs", Team Copy. The script sets --cols (team columns weighted by
+     lane count, so every lane is the same width, with a --vsw column between teams) and --rows (the stacked order on phones). */
+  .teams { position: absolute; inset: 0 8px 30px 8px; display: grid; grid-template-columns: var(--cols, minmax(0, 1fr)); --base: 110px; --vsw: 44px; --vsh: 26px; }
+  .teams.single .vs { display: none; }
+  .team { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; }
+  /* fighting-game HUD: team name, big signed total, health bar anchored at the nearest "vs" column (the middle team's grows both ways) */
+  .team-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 2px 12px; align-items: end; overflow: hidden;
+               padding: 10px 14px 0; font: 400 22px/1 var(--pixel); color: var(--haze); letter-spacing: .02em; white-space: nowrap; --hud: var(--gold); }
+  .team[data-team="bots"] .team-head { --hud: #c8d0e8; }
+  .team[data-team="copy"] .team-head { --hud: #ff5fd2; }
+  .team-head b { font-weight: 400; color: var(--moon); text-shadow: 2px 2px 0 var(--ink); }
+  .team-head .tname { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .team-head .leadtag { display: none; margin-left: 8px; padding: 3px 4px 0; font: 400 13px/1 var(--pixel); color: var(--ink); background: var(--gold);
+                        box-shadow: 2px 2px 0 var(--ink); vertical-align: 3px; letter-spacing: 0; }
+  .team.lead .team-head .leadtag { display: inline-block; }
+  .team-head .tpnl { font: 400 34px/1 var(--pixel); font-variant-numeric: tabular-nums; text-shadow: 2px 2px 0 var(--ink); }
+  .team-head .tavg { font-size: 13px; color: var(--haze); letter-spacing: 0; font-family: var(--body); }
+  .team-head .hp { grid-column: 1 / -1; position: relative; height: 14px; background: var(--ink); border: 2px solid var(--moon);
+                   box-shadow: 2px 2px 0 var(--ink); overflow: hidden; }
+  .team-head .hp i { position: absolute; top: 0; bottom: 0; width: 50%; background: var(--hud); transition: width .7s steps(7);
+                     box-shadow: inset 0 3px 0 rgba(255, 255, 255, .35), inset 0 -3px 0 rgba(0, 0, 0, .25); }
+  .team-head .hp i.neg { background: var(--loss); }
+  .team-head .hp::before, .team-head .hp::after { content: ""; position: absolute; top: -2px; bottom: -2px; left: calc(50% - 1px); width: 2px; background: var(--moon); opacity: .6; }
+  .team-head .hp::before { display: none; }
+  .team.left .team-head .hp i { right: 0; }
+  .team.right .team-head .hp i { left: 0; }
+  .team.mid .team-head .hp i { left: 50%; translate: -50% 0; }   /* the start level is a quarter in from each edge */
+  .team.mid .team-head .hp::before { display: block; left: calc(25% - 1px); }
+  .team.mid .team-head .hp::after { left: calc(75% - 1px); }
+  .team.right .team-head { text-align: right; }
+  .team.right .team-head .tpnl { grid-column: 1; grid-row: 1; justify-self: start; }
+  .team.right .team-head .tname { grid-column: 2; grid-row: 1; }
+  /* a team with few lanes gets a smaller HUD and no average, so the head never pushes the lanes */
+  .team.compact .team-head { font-size: 18px; padding: 10px 8px 0; gap: 2px 8px; }
+  .team.compact .team-head .tpnl { font-size: 26px; }
+  .team.compact .team-head .tavg { display: none; }
+  .team.compact .team-head .leadtag { margin-left: 5px; }
+  .team .startline { position: absolute; left: 0; right: 0; bottom: var(--base); border-top: 2px dashed rgba(238, 234, 251, .22); pointer-events: none; }
+  .team-lanes { display: grid; grid-template-columns: repeat(var(--n, 8), minmax(0, 1fr)); min-height: 0; }
+  .vs { position: relative; }
+  .vs::before { content: ""; position: absolute; left: calc(50% - 1px); top: 0; bottom: 0; border-left: 2px dashed rgba(238, 234, 251, .14); }
+  .vs b { position: absolute; left: -10px; right: -10px; top: 40%; text-align: center; font: 400 44px/1 var(--pixel); color: var(--gold);
+          text-shadow: 3px 3px 0 var(--ink), -2px -2px 0 var(--ink); animation: vspulse 1.6s steps(2) infinite; }
+  @keyframes vspulse { 50% { color: var(--moon); } }
+  .vs .start { position: absolute; left: 0; right: 0; bottom: calc(var(--base) + 6px); text-align: center; font: 400 16px/.95 var(--pixel); color: var(--haze); }
+  .lane { position: relative; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; min-width: 0; outline-offset: -2px; }
+  .lane:hover, .lane:focus-within, .lane:focus { z-index: 6; }
+  .lane.show-bubble { z-index: 3; }
+  .pillar { position: relative; width: min(44px, 78%); height: 0; transition: height .7s steps(7);
+            background: var(--c); box-shadow: inset -7px 0 0 rgba(0,0,0,.2), inset 0 5px 0 rgba(255,255,255,.35); }
+  .pillar span { position: absolute; top: 8px; left: 0; right: 7px; text-align: center; font: 400 19px/1 var(--pixel); color: var(--ink); }
+  .sprite { display: block; width: min(52px, 94%); aspect-ratio: 16 / 14; margin-bottom: -1px; }
+  .sprite svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .badge { position: absolute; left: calc(50% + 12px); bottom: calc(var(--top, 0px) + 36px); z-index: 2; padding: 2px 4px 0;
+           font: 400 13px/1 var(--pixel); color: var(--ink); background: var(--gold); box-shadow: 2px 2px 0 var(--ink); pointer-events: none; }
+  .badge.paused { background: var(--haze); }
+  .badge.out { background: var(--loss); }
+  /* a Claude that has used all its lives: greyed out and standing still */
+  .lane.out .sprite, .lane.out .pillar { filter: grayscale(1); opacity: .45; }
+  .lane.out .bob, .lane.out .eye { animation: none; }
+  .lane.bust .sprite { animation: bust .6s steps(6); }
+  @keyframes bust { 0%, 100% { translate: 0 0; } 20% { translate: -4px 0; } 40% { translate: 4px 0; } 60% { translate: -3px 0; } 80% { translate: 3px 0; } }
+  .bob { animation: bob 1.3s steps(2) infinite; }
+  .lane.thinking .bob { animation-duration: 2.6s; }
+  .lane.hop .sprite { animation: hop .5s steps(5); }
+  .eye { transform-box: fill-box; transform-origin: center; animation: blink 4.5s infinite; }
+  @keyframes bob { 50% { transform: translateY(-3px); } }
+  @keyframes hop { 40% { transform: translateY(-22px); } 100% { transform: translateY(0); } }
+  @keyframes blink { 0%, 95%, 100% { transform: scaleY(1); } 97% { transform: scaleY(.15); } }
+
+  /* bubbles are hidden by default; shown for thinking agents, the most recent movers, and the hovered/focused lane */
+  .bubble { display: none; position: relative; z-index: 2; --tail: 50%; width: max-content; max-width: 156px; margin: 0 0 16px; padding: 5px 8px;
+            background: var(--moon); color: var(--ink); font-size: 12px; line-height: 1.3;
+            box-shadow: 0 -4px 0 0 var(--moon), 0 4px 0 0 var(--moon), -4px 0 0 0 var(--moon), 4px 0 0 0 var(--moon); }
+  .lane.show-bubble .bubble, .lane:hover .bubble, .lane:focus-within .bubble, .lane:focus .bubble { display: block; }
+  .bubble::before, .bubble::after { content: ""; position: absolute; background: var(--moon); }
+  .bubble::before { left: calc(var(--tail) - 8px); bottom: -10px; width: 14px; height: 6px; }
+  .bubble::after { left: calc(var(--tail) - 4px); bottom: -14px; width: 6px; height: 4px; }
+  .bubble.thought { padding: 3px 7px; margin-bottom: 24px; white-space: nowrap; }
+  .team-lanes .lane:nth-child(even) .bubble.thought { margin-bottom: 58px; }  /* neighbours thinking at once don't overlap */
+  .bubble.thought::before { left: calc(var(--tail) - 6px); bottom: -14px; width: 8px; height: 8px; }
+  .bubble.thought::after { left: calc(var(--tail) + 4px); bottom: -22px; width: 5px; height: 5px; }
+  .bubble.err { --moon: #ffd6dc; }
+  .bubble .say { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .bubble small { display: block; margin-top: 2px; color: #5b5590; font-size: 11px; }
+  .bubble.thought small { margin-top: 0; }
+  /* edge lanes: nudge wide bubbles back inside the stage, tail stays over the sprite */
+  .team.left .lane:first-child .bubble { translate: 36px 0; --tail: calc(50% - 36px); }
+  .team.right .lane:last-child .bubble, .teams.single .team .lane:last-child .bubble { translate: -36px 0; --tail: calc(50% + 36px); }
+  .dots::after { content: "..."; display: inline-block; width: 1.4em; text-align: left; animation: dots 1.2s steps(4) infinite; overflow: hidden; vertical-align: bottom; }
+  @keyframes dots { 0% { width: 0; } 100% { width: 1.4em; } }
+
+  .pop { position: absolute; left: 50%; bottom: calc(var(--top) + 52px); transform: translateX(-50%); white-space: nowrap; pointer-events: none; z-index: 5;
+         font: 400 19px var(--pixel); color: var(--moon); text-shadow: 2px 2px 0 var(--ink); animation: pop 1.8s steps(12) forwards; }
+  .pop.buy { color: var(--profit); } .pop.sell { color: var(--gold); } .pop.sell.neg { color: var(--loss); }
+  @keyframes pop { 0% { opacity: 0; translate: 0 10px; } 15% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; translate: 0 -40px; } }
+
+  .labels { display: grid; grid-template-columns: var(--cols, minmax(0, 1fr)); --vsw: 44px; padding: 10px 8px 0; }   /* same columns as the stage */
+  .label-gap { min-width: 0; }
+  .label-team { display: grid; grid-template-columns: repeat(var(--n, 8), minmax(0, 1fr)); min-width: 0; }
+  .label { text-align: center; min-width: 0; padding: 0 3px; display: grid; grid-template-rows: minmax(30px, auto) auto auto; }
+  .label .name { align-self: end; font: 400 15px/1 var(--pixel); color: var(--c); overflow-wrap: anywhere; }
+  .label .eq { font: 400 24px/1.05 var(--pixel); font-variant-numeric: tabular-nums; }
+  .label .pnl { font-size: 12px; font-variant-numeric: tabular-nums; }
+  /* the figures above can spill past a narrow lane; the hearts row keeps to the lane itself (centred under its pillar, shrinking to fit) */
+  .label { container-type: inline-size; }
+  .label .lives { display: flex; justify-content: center; justify-self: start; width: 100cqw; min-width: 0; margin-top: 4px; }
+  .label .lives:empty { display: none; }
+  .label .lives .hearts { min-width: 0; max-width: 100%; }
+  .label.out .name, .label.out .eq { opacity: .55; }
+
+  /* lives: one pixel heart per life, filled while it's left, an outline once it's used */
+  .hearts { display: inline-flex; align-items: center; gap: 2px; vertical-align: middle; line-height: 0; }
+  .hearts svg { display: block; flex: 0 1 auto; min-width: 0; width: 14px; height: auto; aspect-ratio: 7 / 6; }
+  .hearts .full { fill: var(--loss); } .hearts .shine { fill: #ffd6dc; } .hearts .empty { fill: var(--haze); }
+
+  /* ---------- at a glance: the leader and one card per team, then the announcer's latest line ---------- */
+  .glance { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); margin-top: 18px; }
+  .gl-card { min-width: 0; padding: 12px 14px 10px; background: var(--dusk); border: 1px solid var(--seam); border-radius: 4px;
+             box-shadow: inset 0 3px 0 var(--hud, var(--gold)); }
+  .gl-card[data-team="bots"] { --hud: #c8d0e8; }
+  .gl-card[data-team="copy"] { --hud: #ff5fd2; }
+  .gl-k { display: flex; align-items: center; gap: 8px; color: var(--haze); font-size: 12px; min-height: 17px; }
+  .gl-k .leadtag { padding: 3px 4px 0; font: 400 13px/1 var(--pixel); color: var(--ink); background: var(--gold); box-shadow: 2px 2px 0 var(--ink); }
+  .gl-v { margin-top: 4px; font: 400 34px/1 var(--pixel); font-variant-numeric: tabular-nums; text-shadow: 2px 2px 0 var(--ink); }
+  .gl-v small { font: 400 13px var(--body); color: var(--haze); text-shadow: none; }
+  .gl-d { margin-top: 3px; color: var(--haze); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gl-agent { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 8px; cursor: pointer; }
+  .gl-agent .av { width: 26px; height: 23px; flex: none; }
+  .gl-agent b { min-width: 0; font: 400 18px/1 var(--pixel); color: var(--c); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gl-agent > span { margin-left: auto; flex: none; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .gl-agent:hover b { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+  .gl-card.leader .gl-agent { margin-top: 6px; }
+  .gl-card.leader .gl-agent .av { width: 40px; height: 35px; }
+  .gl-card.leader .gl-agent b { font-size: 30px; text-shadow: 2px 2px 0 var(--ink); }
+  /* the announcer plugin keeps only its newest line here */
+  #slot-under-stage .cm-wrap { display: flex; align-items: center; gap: 12px; margin-top: 10px; padding: 8px 14px; }
+  #slot-under-stage .cm-wrap[hidden] { display: none; }
+  #slot-under-stage .cm-head { margin: 0; flex: none; }
+  #slot-under-stage .cm-live { flex: 1; min-width: 0; min-height: 0; font-size: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #slot-under-stage .cm-hist { display: none; }
+
+  /* ---------- tabs: the detail, one section at a time ---------- */
+  .tabs { position: sticky; top: 0; z-index: 40; display: flex; gap: 2px; margin-top: 26px; padding-top: 6px; background: var(--night);
+          border-bottom: 2px solid var(--seam); overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: none; display: inline-flex; align-items: center; gap: 8px; margin-bottom: -2px; padding: 9px 14px 8px; background: none; border: 0;
+         border-bottom: 3px solid transparent; font: 400 23px/1 var(--pixel); letter-spacing: .02em; color: var(--haze); cursor: pointer; white-space: nowrap; }
+  .tab:hover { color: var(--moon); }
+  .tab[aria-selected="true"] { color: var(--moon); border-bottom-color: var(--gold); }
+  .tab:focus-visible { outline-offset: -4px; }
+  .tab-badge { padding: 3px 5px; border-radius: 2px; background: var(--seam); color: var(--moon); font: 500 11px/1 var(--body); letter-spacing: 0; }
+  .tab-badge:empty { display: none; }
+  .tab-badge.new, .tab-badge.warn { background: var(--gold); color: var(--ink); }
+  .tab-badge.bad { background: var(--loss); color: var(--ink); }
+  .tabpanel { padding-top: 24px; min-height: 60vh; }
+  .tabpanel[hidden] { display: none; }
+  .tabpanel > :first-child, .tabpanel > [id^="slot-"]:first-child > :first-child { margin-top: 0; }
+  .overview { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); align-items: start; }
+  .overview .chartwrap { height: 480px; }
+  .overview > section:last-child { position: sticky; top: 70px; }
+  .seg { display: inline-flex; }
+  .seg .tb-btn { border-radius: 0; }
+  .seg .tb-btn:first-child { border-radius: 3px 0 0 3px; }
+  .seg .tb-btn:last-child { border-radius: 0 3px 3px 0; margin-left: -1px; }
+  #markers-wrap { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+  #markers-wrap[hidden] { display: none; }
+  .mini-row { display: grid; grid-template-columns: 38px 28px minmax(0, 1fr) auto 62px; align-items: center; gap: 10px; padding: 7px 14px;
+              border-bottom: 1px solid var(--seam); cursor: pointer; }
+  .mini-row:last-child { border-bottom: 0; }
+  .mini-row:hover { background: rgba(238, 234, 251, .04); }
+  .mini-row .rk { font: 400 21px/1 var(--pixel); color: var(--haze); }
+  .mini-row:first-child .rk { color: var(--gold); }
+  .mini-row .av { width: 28px; height: 25px; }
+  .mini-row .nm { min-width: 0; }
+  .mini-row .nm b { display: block; font: 400 20px/1.05 var(--pixel); color: var(--c); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mini-row .nm small { display: block; color: var(--haze); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mini-row .nm .hearts { margin-left: 7px; vertical-align: 2px; }
+  .mini-row .nm .hearts svg { width: 10px; }
+  .mini-row .nm small .neg { font-weight: 500; }
+  .mini-row.out .av, #board tr.out .av { filter: grayscale(1); opacity: .5; }
+  .mini-row .eq { color: var(--haze); font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; }
+  .mini-row .pc { font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
+  .more { display: inline-flex; margin-top: 10px; padding: 4px 0; background: none; border: 0; font: 500 13px var(--body); color: var(--gold); cursor: pointer; }
+  .more:hover { text-decoration: underline; }
+  /* the full standings table lives in the Agents tab: one line of bio per agent, the catchphrase is in the profile */
+  #tab-agents .who-cell div div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 56ch; }
+  #tab-agents .who-cell .desc { display: none; }
+  .jump { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 18px; }
+  .jump button { font: 500 13px/1 var(--body); color: var(--moon); background: var(--dusk); border: 1px solid var(--seam); border-radius: 3px;
+                 padding: 7px 10px; cursor: pointer; }
+  .jump button:hover { border-color: var(--gold); }
+  .jump + .block { margin-top: 0; }
+  .tabpanel section, .tabpanel [id^="slot-"] { scroll-margin-top: 72px; }   /* clear the sticky tab bar */
+
+  /* ---------- panels ---------- */
+  .feeds { display: grid; gap: 20px; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); margin-top: 36px; }
+  section { min-width: 0; }
+  /* one heading style everywhere: pixel display face with a gold pip, muted sentence-case caption under it */
+  h2 { display: flex; align-items: center; gap: 10px; font: 400 30px/1 var(--pixel); margin: 0 0 6px; letter-spacing: .02em; color: var(--moon); }
+  h2::before { content: ""; width: 8px; height: 8px; background: var(--gold); flex: none; box-shadow: 2px 2px 0 var(--ink); }
+  .sub { color: var(--haze); font-size: 13px; margin: 0 0 12px; max-width: 80ch; }
+  .panel { background: var(--dusk); border: 1px solid var(--seam); border-radius: 4px; }
+  .scroll { max-height: 600px; overflow-y: auto; scrollbar-color: var(--seam) transparent; }
+  .pos { color: var(--profit); } .neg { color: var(--loss); }
+  .empty { color: var(--haze); font-size: 14px; padding: 18px 16px; }
+
+  .decision { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 14px 16px 14px 66px; border-bottom: 1px solid var(--seam); }
+  .decision:last-child { border-bottom: 0; }
+  .decision .av { position: absolute; left: 16px; top: 14px; width: 38px; height: 34px; }   /* out of the flow: woke + orders + watching rows never wrap under it */
+  .decision .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+  .decision .who { font: 400 22px/1 var(--pixel); color: var(--c); }
+  .decision .when { color: var(--haze); font-size: 12px; }
+  .decision .note { margin: 0; max-width: 68ch; }
+  .decision.err .note { color: #ffb3bd; }
+  .decision.live .note { color: var(--haze); }
+  .orders { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+  .orders li { display: grid; grid-template-columns: 44px 70px 64px minmax(0, 1fr); gap: 8px; font-size: 13px; align-items: baseline; }
+  .orders li.no { opacity: .5; }
+  .orders li.no .why::before { content: "Not placed: "; color: var(--loss); }
+  .orders .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .orders .why { color: var(--haze); }
+  .orders .exits { display: block; color: var(--gold); font-size: 12px; }
+  .decision .woke { color: #62f0ff; font-size: 12px; }
+  .decision .watching { color: var(--haze); font-size: 12px; margin-top: 2px; }
+  .side.exit { color: var(--gold); }
+  .bag td.exits-cell { color: var(--gold); font-size: 12px; white-space: normal; min-width: 96px; }
+  .bag td.exits-cell .none { color: var(--loss); }
+  .side { font-weight: 600; }
+  .side.buy { color: var(--profit); } .side.sell { color: var(--gold); }
+  .sym { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .trade { display: grid; grid-template-columns: 82px minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 16px; border-bottom: 1px solid var(--seam); }
+  .trade:last-child { border-bottom: 0; }
+  .trade .t { color: var(--haze); font-size: 12px; font-variant-numeric: tabular-nums; padding-top: 2px; white-space: nowrap; }
+  .trade .what { font-size: 14px; min-width: 0; }
+  .trade .what b { font-weight: 600; color: var(--c); }
+  .trade .amt { text-align: right; font-variant-numeric: tabular-nums; font-size: 14px; }
+  .trade .amt small { display: block; font-size: 12px; }
+  .trade .why { grid-column: 2 / 4; color: var(--haze); font-size: 12px; }
+  .fresh { animation: fresh 2.5s ease-out; }
+  @keyframes fresh { from { background: rgba(247, 197, 72, .16); } to { background: transparent; } }
+
+  .block { margin-top: 36px; }
+  .chartwrap { height: 320px; padding: 12px 12px 8px; }
+  .chart-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 10px; font-size: 13px; color: var(--haze); }
+  .chart-tools select { font: 500 13px/1 var(--body); color: var(--moon); background: var(--dusk); border: 1px solid var(--seam); border-radius: 3px; padding: 6px 8px; max-width: 100%; }
+  .chart-tools .key { display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; }
+  .chart-tools .key i { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; }
+  .chart-tools .key i.up { border-bottom: 9px solid var(--moon); } .chart-tools .key i.win { border-top: 9px solid var(--profit); } .chart-tools .key i.lose { border-top: 9px solid var(--loss); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--seam); white-space: nowrap; }
+  th { color: var(--haze); font-weight: 500; font-size: 13px; }
+  tr:last-child td { border-bottom: 0; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  #board td:first-child { font: 400 22px/1 var(--pixel); color: var(--haze); }
+  #board tr:first-child td:first-child { color: var(--gold); }
+  .who-cell { display: flex; gap: 10px; align-items: center; white-space: normal; min-width: 260px; }
+  .who-cell .av { width: 32px; height: 28px; flex: none; }
+  .who-cell b { font: 400 21px/1.1 var(--pixel); color: var(--c); }
+  .who-cell b + .hearts { margin-left: 8px; vertical-align: 3px; }
+  .who-cell .hearts svg { width: 12px; }
+  .who-cell div div { color: var(--haze); font-size: 12px; max-width: 60ch; }
+  .who-cell .bio { color: var(--moon); opacity: .85; }
+  .who-cell .bio + .desc { font-size: 11px; }
+  .tablewrap { overflow-x: auto; }
+  .bags { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); }
+  .bag { min-width: 0; overflow-x: auto; }
+  .bag h3 { margin: 0; padding: 12px 14px 6px; font: 400 21px var(--pixel); color: var(--c); }
+  .bag td, .bag th { padding: 7px 10px; font-size: 13px; }
+  .bag td:first-child, .bag th:first-child { padding-left: 14px; }
+  .rate { display: inline-block; width: 8px; height: 8px; margin-right: 8px; }
+  .r-green { background: var(--profit); } .r-yellow { background: var(--gold); } .r-red { background: var(--loss); }
+  .allcash { color: var(--haze); font-size: 14px; margin: 12px 0 0; }
+  .moon { display: inline-block; margin-left: 6px; padding: 2px 4px 0; font: 400 12px/1 var(--pixel); color: var(--ink); background: var(--gold); vertical-align: 1px; }
+  footer { color: var(--haze); font-size: 12px; padding: 32px 0 40px; max-width: 80ch; }
+
+  /* ---------- small screens ---------- */
+  @media (max-width: 1140px) {   /* 19 lanes get about 45px each here: compact HUDs on every team, smaller label figures */
+    .team .team-head { font-size: 18px; padding: 10px 8px 0; gap: 2px 8px; }
+    .team .team-head .tpnl { font-size: 26px; }
+    .team .team-head .tavg { display: none; }
+    .label .name { font-size: 13px; } .label .eq { font-size: 18px; } .label .pnl { font-size: 11px; }
+    .label .lives { margin-top: 3px; } .label .hearts { gap: 1px; } .label .hearts svg { width: 10px; }
+    .pillar span { font-size: 16px; }
+    .vs b { font-size: 36px; }
+  }
+  @media (max-width: 900px) {
+    .feeds { grid-template-columns: minmax(0, 1fr); }
+    .overview { grid-template-columns: minmax(0, 1fr); }
+    .overview > section:last-child { position: static; }
+    .overview .chartwrap { height: 340px; }
+    .bubble { font-size: 12px; }
+    .bubble .say { -webkit-line-clamp: 2; }
+  }
+  @media (max-width: 640px) {
+    .wrap { padding: 0 16px; }
+    .meta { margin-left: 0; order: 9; width: 100%; }
+    h1 { font-size: 30px; }
+    .set-panel { position: fixed; top: 64px; left: 16px; right: 16px; width: auto; }
+    .glance { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .gl-card { padding: 10px 10px 8px; }
+    .gl-card.leader { grid-column: 1 / -1; }
+    .gl-v { font-size: 28px; }
+    #slot-under-stage .cm-live { font-size: 17px; }
+    .tab { font-size: 20px; padding: 8px 10px 7px; }
+    .mini-row { grid-template-columns: 30px 24px minmax(0, 1fr) 58px; gap: 8px; padding: 7px 10px; }
+    .mini-row .eq { display: none; }
+    .mini-row .av { width: 24px; height: 21px; }
+    h2 { font-size: 26px; }
+    /* teams stack: Team Claude on top, a floor-styled "vs" bar, Team Bots, another bar, Team Copy. Every HUD reads left to right. */
+    .stage { height: calc(170px * var(--teams, 2) + 90px); }   /* two teams 430px, three 600px */
+    .stage svg.skyline { height: 120px; bottom: 24px; }
+    .floor { height: 24px; }
+    .teams { inset: 0 4px 24px; grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--rows, minmax(0, 1fr)); }
+    .teams .team .team-head, .teams .team.compact .team-head { font-size: 15px; padding: 6px 6px 0; gap: 0 8px; text-align: left; }
+    .teams .team .team-head .tpnl { font-size: 22px; grid-column: 2; grid-row: 1; justify-self: end; }
+    .teams .team .team-head .tname { grid-column: 1; grid-row: 1; }
+    .team-head .tavg { display: none; }
+    .team-head .leadtag { font-size: 11px; padding: 2px 3px 0; margin-left: 5px; vertical-align: 2px; }
+    .team-head .hp { height: 8px; border-width: 1px; }
+    .teams .team .team-head .hp i { left: 0; right: auto; translate: none; }   /* stacked: every bar fills from the left */
+    .teams .team.mid .team-head .hp::before { display: none; } .teams .team.mid .team-head .hp::after { left: calc(50% - 1px); }
+    .vs { margin: 0 -4px; border-top: 4px solid #463b8c; background: repeating-conic-gradient(#231c4f 0 25%, #2a2259 0 50%) 0 0 / 20px 20px; }
+    .vs::before, .vs .start { display: none; }
+    .vs b { top: -3px; left: 0; right: 0; font-size: 24px; text-shadow: 2px 2px 0 var(--ink); animation: none; }
+    .sprite { width: min(30px, 90%); }
+    .pillar { width: min(22px, 72%); box-shadow: inset -4px 0 0 rgba(0,0,0,.2), inset 0 3px 0 rgba(255,255,255,.35); }
+    .pillar span { font-size: 12px; top: 4px; right: 4px; }
+    .badge { font-size: 11px; left: calc(50% + 6px); bottom: calc(var(--top, 0px) + 20px); }
+    .bubble { font-size: 11px; max-width: 150px; margin-bottom: 14px; }
+    .bubble .say { -webkit-line-clamp: 2; }
+    .lane.show-bubble:not(:hover):not(:focus) .bubble:not(.thought) { display: none; }  /* room is tight: only thought bubbles by default */
+    .bubble.thought, .team-lanes .lane:nth-child(even) .bubble.thought { padding: 2px 6px; margin-bottom: 18px; }   /* the desktop stagger would push a stacked row down */
+    .bubble.thought small, .bubble.thought .word { display: none; }  /* neighbours are 49px apart: just the dots */
+    .team .lane:first-child .bubble { translate: 36px 0; --tail: calc(50% - 36px); }
+    .team .lane:last-child .bubble { translate: -36px 0; --tail: calc(50% + 36px); }
+    .pop { font-size: 15px; bottom: calc(var(--top) + 30px); }
+    .labels { grid-template-columns: minmax(0, 1fr); row-gap: 10px; padding: 8px 0 0; }
+    .label-gap { display: none; }
+    .label { padding: 0 1px; grid-template-rows: minmax(26px, auto) auto auto; }
+    .label .name { font-size: 11px; } .label .eq { font-size: 15px; } .label .pnl { font-size: 10px; }
+    .label .lives { margin-top: 2px; } .label .hearts svg { width: 7px; }
+    .orders li { grid-template-columns: 40px 60px 56px; }
+    .orders .why { grid-column: 1 / -1; }
+    .decision { padding-left: 58px; } .decision .av { left: 12px; width: 34px; height: 30px; }
+    .chartwrap { height: 260px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bob, .eye, .lane.hop .sprite, .lane.bust .sprite, .dots::after, .fresh, .brand .coin, .vs b { animation: none !important; }
+    .pillar, .team-head .hp i { transition: none; }
+    .pop { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="slot-top"></div>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <svg class="coin" viewBox="0 0 8 8" shape-rendering="crispEdges" aria-hidden="true"><path fill="#c9961f" d="M2 0h4v1h1v1h1v4H7v1H6v1H2V7H1V6H0V2h1V1h1z"/><path fill="#f7c548" d="M2 1h4v1h1v4H6v1H2V6H1V2h1z"/><path fill="#ffe08a" d="M2 1h2v1H2zM1 2h1v2H1z"/><path fill="#c9961f" d="M3 2h2v1H3zM3 3h1v2H3zM3 5h2v1H3z"/></svg>
+      <h1>Memecoin <em>Arena</em></h1>
+    </div>
+    <span id="mode" class="mode"><i></i><span>Connecting</span></span>
+    <span class="statusbar" id="statusbar"></span>
+    <div class="meta" id="meta"></div>
+    <nav class="nav" aria-label="Pages"><a href="/recap">Daily recap</a></nav>
+    <div class="settings" id="settings-wrap">
+      <button type="button" class="tb-btn set-btn" id="settings-btn" aria-expanded="false" aria-controls="settings-panel">
+        <svg viewBox="0 0 8 8" shape-rendering="crispEdges" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M3 0h2v1h1v1h1v1h1v2H7v1H6v1H5v1H3V7H2V6H1V5H0V3h1V2h1V1h1zM3 3v2h2V3z"/></svg>Settings</button>
+      <div class="set-panel" id="settings-panel" role="dialog" aria-label="Settings" hidden>
+        <div class="set-h">Settings</div>
+        <div class="toolbar" id="toolbar"></div>
+        <p class="set-note">Saved in this browser.</p>
+      </div>
+    </div>
+  </header>
+
+  <div class="stage" id="stage" role="group" aria-label="Leaderboard stage">
+    <svg class="sky" id="sky" aria-hidden="true"></svg>
+    <svg class="skyline" id="skyline" aria-hidden="true" preserveAspectRatio="none"></svg>
+    <div class="floor"></div>
+    <div class="teams" id="lanes"></div>
+  </div>
+  <div class="labels" id="labels"></div>
+  <div class="glance" id="glance" aria-label="At a glance"></div>
+  <div id="slot-under-stage"></div>
+
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Sections">
+    <button type="button" class="tab" role="tab" id="tabbtn-overview" data-tab="overview" aria-controls="tab-overview">Overview</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-screens" data-tab="screens" aria-controls="tab-screens">Claude screens</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-feed" data-tab="feed" aria-controls="tab-feed">Live feed <span class="tab-badge" id="badge-feed"></span></button>
+    <button type="button" class="tab" role="tab" id="tabbtn-agents" data-tab="agents" aria-controls="tab-agents">Agents</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-room" data-tab="room" aria-controls="tab-room">Strategy room <span class="tab-badge" id="badge-room"></span></button>
+    <button type="button" class="tab" role="tab" id="tabbtn-traders" data-tab="traders" aria-controls="tab-traders">Top traders</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-analytics" data-tab="analytics" aria-controls="tab-analytics">Who's really winning</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-council" data-tab="council" aria-controls="tab-council">Council</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-usage" data-tab="usage" aria-controls="tab-usage">Usage <span class="tab-badge" id="badge-usage"></span></button>
+  </nav>
+
+  <div class="tabpanel" id="tab-overview" role="tabpanel" aria-labelledby="tabbtn-overview">
+    <div class="overview">
+      <section>
+        <h2>Standings</h2>
+        <p class="sub">Ranked by real profit, the number that matters for live money. Claudes also show their game points (losses count less in early lives, +25% milestones pay). Click anyone for their profile.</p>
+        <div class="panel" id="mini-board"></div>
+        <button type="button" class="more" data-goto="agents">Full table, open positions and head to head</button>
+      </section>
+      <section>
+        <h2>Equity over time</h2>
+        <p class="sub" id="chart-sub"></p>
+        <div class="chart-tools" id="chart-tools">
+          <span class="seg" role="group" aria-label="Lines to show">
+            <button type="button" class="tb-btn" data-view="teams" aria-pressed="true">Teams</button><button type="button" class="tb-btn" data-view="agents" aria-pressed="false">Everyone</button>
+          </span>
+          <span id="markers-wrap">
+            <button type="button" class="tb-btn" id="markers-toggle" aria-pressed="true">Trade markers</button>
+            <label>for <select id="markers-agent" aria-label="Show trade markers for"><option value="all">all agents</option></select></label>
+            <span class="key" aria-hidden="true"><i class="up"></i>buy <i class="win"></i>sell, profit <i class="lose"></i>sell, loss</span>
+          </span>
+        </div>
+        <div class="panel chartwrap"><canvas id="chart" aria-label="Equity over time for each agent"></canvas></div>
+      </section>
+    </div>
+  </div>
+
+  <div class="tabpanel" id="tab-screens" role="tabpanel" aria-labelledby="tabbtn-screens" hidden><div id="slot-screens"></div></div>
+
+  <div class="tabpanel" id="tab-feed" role="tabpanel" aria-labelledby="tabbtn-feed" hidden>
+  <div class="feeds">
+    <section>
+      <h2>Claude's decisions</h2>
+      <p class="sub">Each time one of the Claude agents looks at the market: what it thought, what it ordered, and when it'll look again.</p>
+      <div id="slot-decisions-tools"></div>
+      <div class="panel scroll" id="decisions"></div>
+    </section>
+    <section>
+      <h2>Trades</h2>
+      <p class="sub">Every fill from every agent, newest first.</p>
+      <div id="slot-trades-tools"></div>
+      <div class="panel scroll" id="trades"></div>
+    </section>
+  </div>
+
+  </div>
+
+  <div class="tabpanel" id="tab-agents" role="tabpanel" aria-labelledby="tabbtn-agents" hidden>
+  <nav class="jump" aria-label="Jump to">
+    <button type="button" data-jump="agents-standings">Standings</button>
+    <button type="button" data-jump="agents-positions">Open positions</button>
+    <button type="button" data-jump="slot-after-standings">Head to head</button>
+  </nav>
+  <section class="block" id="agents-standings">
+    <h2>Standings</h2>
+    <div class="panel tablewrap">
+      <table>
+        <thead><tr><th>Rank</th><th>Agent</th><th class="n">Equity</th><th class="n">P&amp;L</th><th class="n">Cash</th>
+          <th class="n">Trades</th><th class="n">Win rate</th><th class="n">Max drawdown</th></tr></thead>
+        <tbody id="board"></tbody>
+      </table>
+    </div>
+  </section>
+  <section class="block" id="agents-positions">
+    <h2>Open positions</h2>
+    <div class="bags" id="bags"></div>
+    <p class="allcash" id="allcash"></p>
+  </section>
+  <div id="slot-after-standings"></div>
+  </div>
+
+  <div class="tabpanel" id="tab-room" role="tabpanel" aria-labelledby="tabbtn-room" hidden><div id="slot-room"></div></div>
+
+  <div class="tabpanel" id="tab-traders" role="tabpanel" aria-labelledby="tabbtn-traders" hidden><div id="slot-copy"></div></div>
+  <div class="tabpanel" id="tab-analytics" role="tabpanel" aria-labelledby="tabbtn-analytics" hidden><div id="slot-analytics"></div></div>
+  <div class="tabpanel" id="tab-council" role="tabpanel" aria-labelledby="tabbtn-council" hidden><div id="slot-council"></div></div>
+  <div class="tabpanel" id="tab-usage" role="tabpanel" aria-labelledby="tabbtn-usage" hidden><div id="slot-usage"></div></div>
+
+  <footer>Paper trading only: fake money, real (or mock) prices. Fills are estimates, and real trading is usually worse because of sniper bots, MEV and failed transactions.</footer>
+</div>
+
+<script>
+/* ---------- pixel mascots: 16x14 grids, one letter per pixel ---------- */
+const PAL = {
+  O: "#e8875e", o: "#c2633f", K: "#1b1640", Y: "#f7c548", y: "#c9961f", R: "#ff5d73",
+  B: "#62c6ff", b: "#2f8fd0", V: "#59e3a7", v: "#2fae78",
+  P: "#9945ff", M: "#5c7cfa", T: "#14f195", S: "#3b2a7a", G: "#9ccb6e", g: "#6e9f48",
+  N: "#9a6440", n: "#6b4329", F: "#e9c29a",
+  L: "#c8d0e8", s: "#8e97b5", D: "#1b1640", C: "#62f0ff", W: "#ffffff", A: "#ff5d73",
+  Q: "#b957e8", q: "#8a3cc2", X: "#6a4bd6", H: "#67638f", h: "#464266", E: "#ff8c3a",
+  I: "#ff5fd2", J: "#3d8bff", U: "#ffa132",   // Team Copy's inks: magenta, azure, tangerine
+  Z: "#e39bff", z: "#b36ad6",                 // Sonnet Copycat's cat ears (orchid, inner ear)
+  c: "#4d97b3", d: "#2b6077",                 // Sonnet Graduate's mortarboard (steel blue, its shaded edge)
+  r: "#ffc6b8", p: "#e88f78",                 // Sonnet Runner's headband and sneakers (peach, its shade)
+  f: "#f6e9cc", e: "#cdb48a", u: "#9a7b52",   // the Graduates bot's diploma (parchment, rolled ends, small print)
+  a: "#b3ac4d", t: "#7d7830",                 // ...and its seal and ribbon (brass, its shade)
+};
+const CLAUDE = [
+  "..OOOOOOOOOOOO..", "..OOOOOOOOOOOO..", "..OOOKOOOOKOOO..", "..OOOKOOOOKOOO..", "OOOOOOOOOOOOOOOO",
+  "ooOOOOOOOOOOOOoo", "..OOOOOOOOOOOO..", "..oooooooooooo..", "..O.O......O.O..", "..o.o......o.o..",
+];
+const BERET = [".........b......", "...BBBBBBBBBB...", "..BBBBBBBBBBBBB."];
+const HATS = {  // 3 rows sit under an empty top row; 4-row hats use the top row too
+  opus:   ["....Y..YY..Y....", "....YYYYYYYY....", "....YyRyyRyY...."],
+  sonnet: BERET,
+  haiku:  ["........V.......", ".......VV.......", "......vV........"],
+  fable:  [".......QQ.......", "......QYQQ......", ".....qqqqqq.....", "..QQQQQQQQQQQQ.."],   // storyteller's pointed hat with a star
+  claude: ["................", "................", "................"],
+  "sonnet-degen": BERET, "sonnet-skeptic": BERET, "sonnet-scalper": BERET,
+  "sonnet-twin": ["......b.........", "...BBBBBYBBBB...", ".BBBBBBBBBBBBB.."],   // Sonnet's identical twin: beret worn the other way, gold pin
+  "sonnet-triplet": [".........b......", "...BBBWBWBWBB...", "..BBBBBBBBBBBBB."],   // the third copy: Sonnet's own beret with three white pins, one per sibling
+  "sonnet-copycat": ["..ZZ.......ZZ...", "..ZzZ..b..ZzZ...", "...BBBBBBBBBB...", "..BBBBBBBBBBBBB."],   // Sonnet's beret with cat ears poking up through it
+  "sonnet-graduate": ["....ccccYccc....", ".cccccccccccccc.", "dddddddddddddddY", "....bbbbbbbb...Y"],   // mortarboard over Sonnet's blue cap, gold tassel
+  "sonnet-runner": ["..b.............", "..BBBBBBBBBB....", ".BBBBBBBBBBBBB.."],   // Sonnet's beret, blown back by the wind
+};
+const FACE = {  // persona accessories: overrides by row on the finished 16x14 grid (body starts at row 4, eyes on rows 6-7)
+  "sonnet-degen":   { 6: "..DDWXXDDWXXDD..", 7: "..OOXXXOOXXXOO.." },                                    // pixel sunglasses
+  "sonnet-skeptic": { 5: "..OOOOOOOOLLOO..", 6: "..OOOKOOOLKCLO..", 7: "..OOOKOOOLKCLO..",                 // magnifying glass over one eye,
+                      8: "OOOOOOOOOOLLOOOO", 9: "ooOOOOOOOOOOOnoo", 10: "..OOOOOOOOOOOOn." },               // handle held down at the side
+  "sonnet-scalper": { 5: "..RRRRRRWRRRRRR.", 6: "..OOOKOOOOKOOOR." },                                    // sweatband with a knot
+  "sonnet-copycat": { 7: "LLOOOKOOOOKOOOLL", 8: "OOOOOOOZZOOOOOOO" },                                    // whiskers and a little cat nose
+  "sonnet-graduate": { 4: "..OOOOOOOOOOOO.Y", 5: "..OOOOOOOOOOOOYY", 6: "..OOOKOOOOKOOOyy" },             // the tassel hangs past its face
+  "sonnet-runner":  { 4: "p.OOOOOOOOOOOO..", 5: "rrrrrrrrrrrrrr..", 6: "p.OOOKOOOOKOOO..",                  // headband, its tails streaming back,
+                      13: ".rW.rW....rW.rW." },                                                            // and sneakers with white toes
+};
+// Team Copy's mascots: a photocopier with a face, printing out copies of itself. The band and the sheets are the copier's ink;
+// the deeper its slice of the top 100, the more sheets it has out. The copy on the paper blinks too.
+const COPIER = [
+  "...LLLLLLL......", "..LLLLLLLLL.....", ".LLCCCCCCCLL....", ".LLLLLLLLLLL....", ".LLKKLLLLKKL....",
+  ".LLKKLLLLKKL....", ".LLLLLLLLLLL....", ".L#########L####", ".LLLLLLLLLLLWKKW", ".LLLLLLLLLLLWWWW",
+  ".LsssssssssLWWWW", ".LLLLLLLLLLL....", "..LL.....LL.....", "..ss.....ss.....",
+];
+function copier(ink, sheets) {
+  const rows = COPIER.map(r => r.replace(/#/g, ink));
+  if (sheets > 1) rows[11] = ".LLLLLLLLLLLWWWW";
+  if (sheets > 2) rows[12] = "..LL.....LL.WWWW";
+  return { eyes: "K", rows };
+}
+const SPRITES = {
+  turtle: { eyes: "", rows: [
+    "................", "................", "................", "................", "................", "................",
+    "....PPPMMTT.....", "...PPPPMMTTT....", "..PPPPPMMTTTT.gg", "..PPPPPMMTTTTGGG",
+    ".SSSSSSSSSSSSGKG", "gSSSSSSSSSSSSGGG", "..GGg.....GGg...", "..GG......GG...."] },
+  monkey: { eyes: "", rows: [
+    ".....NNNNNN.....", "....NNNNNNNN....", "...NNNNNNNNNN...", ".FNRRRRRRRRRRNF.", ".FNRRRRRRRRRRNFR",
+    "..NFFFFFFFFFFN.R", "...FFFFFFFFFF...", "...FFFKFFKFFF...", "....FFKKKKFF....", ".....NNNNNN.....",
+    "...NNNNNNNNNN...", "..NN.NFFFFN.NN..", "..n..NNNNNN..n..", ".....NN..NN....."] },
+  robot: { eyes: "C", rows: [
+    ".......AA.......", ".......ss.......", "...LLLLLLLLLL...", "...LDDDDDDDDL...", "...LDCCDDCCDL...",
+    "...LDDDDDDDDL...", "...LLLLLLLLLs...", "......ssss......", "..LLLLLLLLLLLs..", ".sLWWWWWWLLLLLs.",
+    ".sLWVKKKWLLLLLs.", ".sLWVKKKWLLLLLs.", "..LLLLLLLLLLLs..", "....ss....ss...."] },
+  rocket: { eyes: "K", rows: [   // a little rocket with a face on its hull and a flame underneath
+    ".......RR.......", "......RRRR......", ".....RRRRRR.....", ".....LWWWWL.....", ".....LKWWKL.....",
+    ".....LKWWKL.....", ".....LWWWWL.....", ".....LBBBBL.....", "....RLWWWWLR....", "...RRLWWWWLRR...",
+    "..RRRLLLLLLRRR..", "......EYYE......", ".......YY.......", ".......E........"] },
+  sniper: { eyes: "K", rows: [   // hooded owl, one eye behind a scope lens
+    "................", "....HHHHHHHH....", "...HHHHHHHHHH...", "..HHHHHHHHHHHH..", "..HHWWWHHCCCHH..",
+    "..HHWKWYYCKCHH..", "..HHWWWHHCCCHH..", "..HHhFFFFFFhHH..", "..HHhFFFFFFhHH..", "...HhFFFFFFhH...",
+    "....hhFFFFhh....", ".....hhhhhh.....", "......Y..Y......", ".....YY..YY....."] },
+  index: { eyes: "K", rows: [    // a pie-chart creature: three slices, two eyes, little feet
+    "................", ".....BBBYYY.....", "...BBBBBYYYYY...", "..BBBBBBYYYYYY..", "..BBBBBBYYYYYY..",
+    "..BBBKBBYYKYYY..", "..BBBKBBYYKYYY..", "..BBBBBBPPPPPP..", "..BBBBBDDPPPPP..", "..BBBBBBPPPPPP..",
+    "...BBBBBPPPPP...", ".....BBBPPP.....", "......nn.nn.....", ".....nn...nn...."] },
+  "dip-buyer": { eyes: "W", rows: [   // grey raccoon in a black eye-mask with a mint collar, woven shopping basket on one arm (it buys the dip)
+    "...ss......ss...", "..sKs......sKs..", "..ssssssssssss..", ".ssssssssssssss.", ".sKKKKKssKKKKKs.",
+    ".sKKWKKssKKWKKs.", ".sKKKKKssKKKKKs.", "..ssssssKKssss..", "...sCCCCCCCCs...", "..ssssssssss.Y..",
+    ".sssssssssss.Y.Y", "..sssssssss.nNnN", "..ss....ss..NnNn", "..ss....ss..nnnn"] },
+  council: { eyes: "K", rows: [   // three Claudes on one body: two beret-wearing analysts flank the crowned chair, sharing arms, legs and an account
+    ".....Y.YY.Y.....", "..b..YYYYYY..b..", "BBBB.YyRyyY.BBBB", "OOOO.OOOOOO.OOOO", "OOOO.OOOOOO.OOOO",
+    "OOKO.OKOOKO.OKOO", "OOKO.OKOOKO.OKOO", "OOOOOOOOOOOOOOOO", "ooOOOOOOOOOOOOoo", "..OOOOOOOOOOOO..",
+    "..OOOOOOOOOOOO..", "..oooooooooooo..", "..O.O......O.O..", "..o.o......o.o.."] },
+  graduates: { eyes: "K", rows: [   // a diploma with eyes: rolled parchment, two lines of small print, a brass seal with ribbon tails
+    "................", "................", "..eeeeeeeeeeee..", ".effffffffffffe.", "..eeeeeeeeeeee..",
+    "...ffKffffKff...", "...ffKffffKff...", "...ffffffffff...", "...fuuuufaaaf...", "...ffffffataf...",
+    "...fuuuufaaaf...", "..eeeeeeetetee..", ".effffffftftffe.", "..eeeeeeeeeeee.."] },
+};
+SPRITES["monkey-green"] = { eyes: "", rows: SPRITES.monkey.rows.map(r => r.replace(/R/g, "V")) };  // same monkey, green blindfold
+SPRITES["copy-a"] = copier("I", 1); SPRITES["copy-b"] = copier("J", 2); SPRITES["copy-c"] = copier("U", 3);
+for (const k of Object.keys(HATS)) {
+  const hat = HATS[k].length < 4 ? ["................", ...HATS[k]] : HATS[k];
+  const rows = [...hat, ...CLAUDE];
+  for (const [i, row] of Object.entries(FACE[k] || {})) rows[+i] = row;
+  SPRITES[k] = { eyes: "K", rows };
+}
+
+function spriteSVG(avatar) {
+  const def = SPRITES[avatar] || SPRITES.claude, paths = {};
+  def.rows.forEach((row, y) => [...row].forEach((ch, x) => {
+    if (ch === ".") return;
+    const key = def.eyes.includes(ch) ? "eye:" + ch : ch;
+    (paths[key] ||= []).push(`M${x} ${y}h1v1h-1z`);
+  }));
+  const body = Object.entries(paths).map(([k, d]) => {
+    const eye = k.startsWith("eye:"), ch = eye ? k.slice(4) : k;
+    return `<path${eye ? ' class="eye"' : ""} fill="${PAL[ch]}" d="${d.join("")}"/>`;
+  }).join("");
+  return `<svg viewBox="0 0 16 14" shape-rendering="crispEdges" aria-hidden="true"><g class="bob">${body}</g></svg>`;
+}
+const AVATAR_COLOR = {
+  // Team Claude: no two hues alike, nothing that reads as profit green or loss red
+  opus: "#f7c548", fable: "#ff8c5a", sonnet: "#62c6ff", haiku: "#6fdcd9",
+  "sonnet-degen": "#ff5fb4", "sonnet-skeptic": "#d4e86a", "sonnet-scalper": "#e97cff", claude: "#e8875e",
+  "sonnet-twin": "#d7f3ff",   // ice: the pale twin of Sonnet's sky blue
+  "sonnet-triplet": "#c7b8ff", // lavender: the third Sonnet, one step past the twin's ice on the cool side
+  "sonnet-graduate": "#4d97b3", // steel blue: a deeper, gown-coloured cousin of Sonnet's sky blue, the colour of its mortarboard
+  "sonnet-runner": "#ffc6b8", // peach: its headband and sneakers
+  council: "#b84dff",         // imperial purple: three Claudes in committee, one account
+  // Team Bots
+  robot: "#c8d0e8", monkey: "#ffb3d1", "monkey-green": "#d9b382", rocket: "#fff1a8", sniper: "#7f88b0", index: "#6b8cff", turtle: "#b488ff",
+  "dip-buyer": "#4fd1e0",     // aqua, the raccoon's mint collar (between Sonnet's blue and Haiku's teal, not profit green)
+  graduates: "#b3ac4d",       // brass, the seal on its diploma (between Opus gold and Skeptic lime, not profit green)
+  // Team Copy: three printer inks for the three slices of the top 100, orchid for the Sonnet that picks what to copy
+  "copy-a": "#ff5fd2", "copy-b": "#3d8bff", "copy-c": "#ffa132",
+  "sonnet-copycat": "#e39bff",
+};
+const colorOf = a => AVATAR_COLOR[a.avatar] || "#c8d0e8";
+/* ---------- teams: every agent carries a team key; older arenas only send kind, so llm → claude and bot → bots ---------- */
+const TEAM_INFO = { claude: "Team Claude", bots: "Team Bots", copy: "Team Copy" };
+const TEAM_ORDER = ["claude", "bots", "copy"];
+const teamOf = a => (a && TEAM_INFO[a.team]) ? a.team : a && a.kind === "llm" ? "claude" : "bots";
+const teamName = key => TEAM_INFO[key] || ("Team " + key);
+
+/* ---------- lives: each Claude gets three; going bust costs one, and with none left it's out. Bots and older arenas send no lives ---------- */
+const HEART_FULL = "M1 0h2v1h1V0h2v1h1v2H6v1H5v1H4v1H3V5H2V4H1V3H0V1h1z";
+const HEART_EMPTY = "M1 0h2v1H1zM4 0h2v1H4zM0 1h1v2H0zM3 1h1v1H3zM6 1h1v2H6zM1 3h1v1H1zM5 3h1v1H5zM2 4h1v1H2zM4 4h1v1H4zM3 5h1v1H3z";
+function livesOf(a) {   // {left, total} for an agent that has lives, null otherwise
+  if (!a || typeof a.lives !== "number" || !isFinite(a.lives) || a.lives < 1) return null;
+  const total = Math.min(9, Math.round(a.lives));
+  const raw = a.out === true ? 0 : typeof a.lives_left === "number" && isFinite(a.lives_left) ? a.lives_left : total;
+  return {total, left: Math.max(0, Math.min(total, Math.round(raw)))};
+}
+const livesText = a => { const l = livesOf(a); return !l ? "" : a.out === true || !l.left ? "out of lives" : `${l.left} of ${l.total} lives left`; };
+function heartsHTML(a) {   // a row of pixel hearts, "" for agents without lives
+  const l = livesOf(a);
+  if (!l) return "";
+  let hearts = "";
+  for (let i = 0; i < l.total; i++) hearts += `<svg viewBox="0 0 7 6" shape-rendering="crispEdges" aria-hidden="true">${i < l.left
+    ? `<path class="full" d="${HEART_FULL}"/><path class="shine" d="M1 1h1v1H1z"/>` : `<path class="empty" d="${HEART_EMPTY}"/>`}</svg>`;
+  const text = livesText(a);
+  return `<span class="hearts" role="img" aria-label="${text[0].toUpperCase() + text.slice(1)}" title="${text[0].toUpperCase() + text.slice(1)}">${hearts}</span>`;
+}
+
+/* ---------- backdrop: pixel stars and a skyline made of candlesticks ---------- */
+function backdrop() {
+  let seed = 7;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  let stars = "";
+  for (let i = 0; i < 70; i++) {
+    const s = rnd() < .15 ? 3 : 2;
+    stars += `<rect x="${(rnd() * 100).toFixed(2)}%" y="${(rnd() * 100).toFixed(2)}%" width="${s}" height="${s}" fill="#eeeafb" opacity="${(.15 + rnd() * .5).toFixed(2)}"/>`;
+  }
+  document.getElementById("sky").innerHTML = stars;
+  let candles = "", x = 0, level = 90;
+  const W = 1000, H = 170;
+  for (let row = 0; row < 2; row++) {
+    x = row * 9; level = 100 + row * 25;
+    while (x < W) {
+      const w = 10 + Math.floor(rnd() * 8), move = (rnd() - .5) * 34;
+      const open = level, close = Math.max(20, Math.min(H - 10, level - move));
+      const top = Math.min(open, close) - 4 - rnd() * 18, bottom = H;
+      const up = close < open;
+      const tone = row ? (up ? "#2c2565" : "#28215d") : (up ? "#231d50" : "#201a4a");
+      candles += `<rect x="${x + w / 2 - 1}" y="${top}" width="2" height="${bottom - top}" fill="${tone}"/>`
+               + `<rect x="${x}" y="${Math.min(open, close)}" width="${w}" height="${bottom - Math.min(open, close)}" fill="${tone}"/>`;
+      if (row && rnd() < .3) candles += `<rect x="${x}" y="${Math.min(open, close)}" width="${w}" height="3" fill="${up ? "#59e3a7" : "#ff6b7a"}" opacity=".22"/>`;
+      level = close; x += w + 6 + Math.floor(rnd() * 10);
+    }
+  }
+  const sk = document.getElementById("skyline");
+  sk.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  sk.innerHTML = candles;
+}
+
+/* ---------- helpers ---------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = (n, d = 2) => (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString(undefined, {minimumFractionDigits: d, maximumFractionDigits: d});
+const signed = (n, d = 2) => (n >= 0 ? "+" : "-") + money(Math.abs(n), d);
+const pct = n => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
+const ordinal = n => n + (["th", "st", "nd", "rd"][(n % 100 > 10 && n % 100 < 14) ? 0 : Math.min(n % 10, 4) % 4] || "th");
+const clock = ts => new Date(ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"});
+const span = s => s < 60 ? `${Math.max(0, Math.round(s))}s` : s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${(s / 3600).toFixed(1)} h` : `${(s / 86400).toFixed(1)} days`;
+const ago = s => s < 45 ? "just now" : `${span(s)} ago`;
+let skew = 0;                       // server clock minus browser clock
+const now = () => Date.now() / 1000 + skew;
+let data = null, lastTradeId = null, seenDecisions = new Set(), firstLoad = true, chart;
+const emit = (name, detail) => { try { document.dispatchEvent(new CustomEvent(name, {detail})); } catch (e) { console.error(e); } };
+const arenaPrefs = {  // per-browser settings for plugins
+  get(k, def) { try { const v = localStorage.getItem("arena:" + k); return v === null ? def : JSON.parse(v); } catch { return def; } },
+  set(k, v) { try { localStorage.setItem("arena:" + k, JSON.stringify(v)); } catch {} emit("arena:prefs", {key: k, value: v}); },
+};
+function setHTML(el, html) { if (el._html !== html) { el.innerHTML = html; el._html = html; } }
+const since = ts => `<span data-since="${ts}"></span>`;
+const until = ts => `<span data-until="${ts}"></span>`;
+function tick() {  // live timers update in place so animations aren't restarted
+  const t = now();
+  document.querySelectorAll("[data-since]").forEach(el => el.textContent = span(t - el.dataset.since));
+  document.querySelectorAll("[data-until]").forEach(el => el.textContent = span(Math.max(0, el.dataset.until - t)));
+}
+
+/* ---------- stage ---------- */
+let laneKey = "";
+const TEAMS = TEAM_ORDER.map(key => [key, TEAM_INFO[key], a => teamOf(a) === key]);
+const teamsOf = agents => TEAM_ORDER.map(key => ({key, title: TEAM_INFO[key], list: agents.filter(a => teamOf(a) === key).sort((a, b) => a.order - b.order)})).filter(t => t.list.length);
+
+function buildStage(agents) {
+  const teams = teamsOf(agents);
+  laneKey = agents.map(a => a.name).join("|");
+  // team columns weighted by lane count so lanes are equal width everywhere; stacked rows on phones
+  const cols = teams.map(t => `minmax(0, ${t.list.length}fr)`).join(" var(--vsw)");
+  const rows = teams.map(() => "minmax(0, 1fr)").join(" var(--vsh)");
+  for (const el of [$("lanes"), $("labels")]) {
+    el.style.setProperty("--cols", cols); el.style.setProperty("--rows", rows); el.style.setProperty("--n", agents.length);
+    el.classList.toggle("single", teams.length < 2);
+  }
+  $("stage").style.setProperty("--n", agents.length);
+  $("stage").style.setProperty("--teams", teams.length);
+  const pos = i => teams.length < 2 || i === 0 ? "left" : i === teams.length - 1 ? "right" : "mid";
+  const lane = a => `
+    <div class="lane" data-name="${esc(a.name)}" style="--c:${colorOf(a)}" tabindex="0">
+      <div class="bubble"><div class="say"></div><small></small></div>
+      <div class="badge" hidden></div>
+      <div class="sprite">${spriteSVG(a.avatar)}</div>
+      <div class="pillar"><span></span></div>
+    </div>`;
+  $("lanes").innerHTML = teams.map((t, i) => `${i ? `<div class="vs" aria-hidden="true"><b>vs</b><div class="start"${i === 1 ? ' id="startlabel"' : ""}></div></div>` : ""}
+    <div class="team ${pos(i)}${t.list.length < 7 ? " compact" : ""}" data-team="${t.key}">
+      <div class="team-head"><span class="tname"><b>${t.title}</b><span class="leadtag">Leading</span> <span class="tavg"></span></span><span class="tpnl"></span>
+        <div class="hp" role="img"><i></i></div></div>
+      <div class="team-lanes" style="--n:${t.list.length}">${t.list.map(lane).join("")}</div>
+      <div class="startline"></div>
+    </div>`).join("");
+  $("labels").innerHTML = teams.map((t, i) => `${i ? `<div class="label-gap" aria-hidden="true"></div>` : ""}
+    <div class="label-team" data-team="${t.key}" style="--n:${t.list.length}">${t.list.map(a => `
+      <div class="label" data-name="${esc(a.name)}" style="--c:${colorOf(a)}" title="${esc(a.catchphrase ? `"${a.catchphrase}" ${a.description || ""}` : a.description)}">
+        <div class="name">${esc(a.name)}</div><div class="eq"></div><div class="pnl"></div><div class="lives"></div>
+      </div>`).join("")}
+    </div>`).join("");
+  document.querySelectorAll(".lane .bob").forEach((g, i) => g.style.animationDelay = `${-i * .37}s`);
+}
+
+function lastTradeOf(name) { return data.trades.find(t => t.agent === name); }
+
+// names of the (up to) three agents that traded or decided most recently, within the last two minutes
+function recentMovers(t, limit = 3) {
+  const last = {};
+  for (const tr of data.trades) last[tr.agent] = Math.max(last[tr.agent] || 0, tr.ts);
+  for (const d of data.decisions) last[d.agent] = Math.max(last[d.agent] || 0, d.ts);
+  return new Set(Object.entries(last).filter(([, ts]) => t - ts < 120).sort((a, b) => b[1] - a[1]).slice(0, limit).map(([n]) => n));
+}
+
+// Who shows a bubble: everyone thinking (compact), plus recent movers whose neighbours aren't already talking
+function bubbleLanes(agents, movers) {
+  const rows = [...document.querySelectorAll(".team-lanes")].map(tl => [...tl.querySelectorAll(".lane[data-name]")].map(l => l.dataset.name));
+  const neighbours = name => {
+    for (const row of rows) { const i = row.indexOf(name); if (i >= 0) return [row[i - 1], row[i + 1]]; }
+    return [];
+  };
+  const shown = new Set(agents.filter(a => a.thinking_since).map(a => a.name));
+  for (const name of movers) if (!shown.has(name) && !neighbours(name).some(n => shown.has(n))) shown.add(name);
+  return shown;
+}
+
+function bubbleFor(a) {
+  const t = now();
+  if (a.out === true) return {cls: "", say: "Out of lives.", small: "Not trading any more."};
+  if (a.kind === "llm") {
+    if (a.thinking_since) return {cls: "thought", say: `<span class="dots"><span class="word">Thinking</span></span>`, small: `${since(a.thinking_since)} so far`};
+    if (a.error) return {cls: "err", say: esc(a.error), small: a.next_run ? `Trying again in ${until(a.next_run)}` : ""};
+    if (a.mode === "paused") return {cls: "", say: a.note ? esc(a.note) : "Paused.", small: "Paused, not looking at the market."};
+    const small = a.next_run > t ? `Looks again in ${until(a.next_run)}` : "";
+    return {cls: "", say: a.note ? esc(a.note) : a.catchphrase ? esc(a.catchphrase) : "About to look at the market.", small};
+  }
+  const tr = lastTradeOf(a.name);
+  if (tr && t - tr.ts < 20 * 60) {
+    const verb = tr.side === "buy" ? `Bought ${esc(tr.symbol)} for ${money(tr.usd, 0)}` : `Sold ${esc(tr.symbol)}, ${signed(tr.pnl ?? 0)}`;
+    return {cls: "", say: verb, small: esc(tr.reason)};
+  }
+  const idle = {
+    turtle: a.positions.length ? "Holding SOL. Not selling." : "Buying SOL.",
+    monkey: "Waiting for the next coin flip.",
+    "monkey-green": "Waiting for the next coin flip. Green-rated coins only.",
+    robot: "Waiting for a green-rated token that's going up.",
+    rocket: "Watching for a token with momentum.",
+    sniper: "Waiting for a fresh launch to snipe.",
+    index: "Holding a slice of the whole board.",
+    "dip-buyer": "Waiting for a dip worth buying.",
+    graduates: "Buying every safe graduate and holding it.",
+    "copy-a": "Copying the top 33 traders. Every buy, every sell.",
+    "copy-b": "Copying traders ranked 34 to 66. Whatever they do.",
+    "copy-c": "Copying traders ranked 67 to 100. No questions asked.",
+  };
+  return {cls: "", say: a.catchphrase ? esc(a.catchphrase) : idle[a.avatar] || "Watching.", small: ""};
+}
+
+function renderStage() {
+  const agents = data.agents;
+  if (agents.map(a => a.name).sort().join("|") !== laneKey.split("|").sort().join("|")) buildStage(agents);
+  const laneEls = [...document.querySelectorAll(".team-lanes")];
+  const H = laneEls.length ? Math.min(...laneEls.map(el => el.clientHeight)) : $("stage").clientHeight - 30;   // height a team's lanes get (per row when stacked)
+  const base = Math.round(H * .26), range = Math.round(H * .2), minH = H < 240 ? 22 : 32;
+  // a Claude that went bust sits far under the start (its score counts every extra stake), so it doesn't set the scale for everyone else
+  const busted = a => a.out === true || (Array.isArray(a.busts) && a.busts.length > 0);
+  const scaled = agents.some(a => !busted(a)) ? agents.filter(a => !busted(a)) : agents;
+  const maxAbs = Math.max(3, ...scaled.map(a => Math.abs(a.pnl_pct)));
+  const t = now(), shown = bubbleLanes(agents, recentMovers(t));
+  $("lanes").style.setProperty("--base", base + "px");
+  document.querySelectorAll(".vs .start").forEach(el => el.textContent = `Start ${money(data.start_cash, 0)}`);
+  agents.forEach((a, rank) => {
+    const lane = document.querySelector(`.lane[data-name="${CSS.escape(a.name)}"]`);
+    const label = document.querySelector(`.label[data-name="${CSS.escape(a.name)}"]`);
+    if (!lane) return;
+    const h = Math.max(minH, Math.min(base + range, Math.round(base + a.pnl_pct / maxAbs * range)));
+    const out = a.out === true, lives = livesText(a);
+    lane.querySelector(".pillar").style.height = h + "px";
+    lane.style.setProperty("--top", h + "px");
+    lane.querySelector(".pillar span").textContent = ordinal(rank + 1);
+    lane.classList.toggle("thinking", !!a.thinking_since);
+    lane.classList.toggle("show-bubble", shown.has(a.name));
+    lane.classList.toggle("out", out);
+    lane.setAttribute("aria-label", `${a.name}, ${ordinal(rank + 1)}, ${money(a.equity, 0)} (${pct(a.pnl_pct)})${lives ? ", " + lives : ""}`);
+    const mode = a.kind === "llm" && a.mode && a.mode !== "normal" ? a.mode : "", badge = lane.querySelector(".badge");
+    const tag = out ? "out" : mode;
+    badge.hidden = !tag; badge.textContent = out ? "OUT" : mode; badge.className = "badge " + tag;
+    const b = bubbleFor(a), bub = lane.querySelector(".bubble");
+    bub.className = "bubble " + b.cls;
+    setHTML(bub.querySelector(".say"), b.say);
+    setHTML(bub.querySelector("small"), b.small);
+    bub.querySelector("small").hidden = !b.small;
+    label.querySelector(".eq").textContent = money(a.equity, 0);
+    label.querySelector(".pnl").innerHTML = `<span class="${a.pnl_pct >= 0 ? "pos" : "neg"}">${pct(a.pnl_pct)}</span>`;
+    label.classList.toggle("out", out);
+    const livesEl = label.querySelector(".lives");
+    if (livesEl) setHTML(livesEl, heartsHTML(a));
+  });
+  const teams = teamsOf(agents).map(team => ({...team, total: team.list.reduce((s, a) => s + a.equity - data.start_cash, 0),
+                                                        avg: team.list.reduce((s, a) => s + a.pnl_pct, 0) / team.list.length}));
+  const lead = teams.length > 1 ? teams.reduce((m, t) => t.avg > m.avg ? t : m) : null;   // the team with the best average wears the tag
+  for (const team of teams) {
+    const head = document.querySelector(`.team[data-team="${team.key}"] .team-head`);
+    if (!head) continue;
+    const {total, avg} = team;
+    head.parentElement.classList.toggle("lead", team === lead && avg > Math.min(...teams.map(t => t.avg)) + 0.05);
+    const el = head.querySelector(".tpnl");
+    el.textContent = signed(total, 0); el.className = "tpnl " + (total >= 0 ? "pos" : "neg");
+    head.querySelector(".tavg").textContent = `${team.list.length} agents, avg ${pct(avg)}`;
+    // health bar: half full at the start line, every 1% of average P&L moves it 6%; it turns red once the team is under water
+    const fill = head.querySelector(".hp i"), share = Math.max(4, Math.min(100, 50 + avg * 6));
+    fill.style.width = share.toFixed(1) + "%"; fill.classList.toggle("neg", avg < -0.5);
+    head.querySelector(".hp").setAttribute("aria-label", `${team.title}: ${signed(total, 0)} total, average ${pct(avg)}${team === lead ? ", leading" : ""}`);
+  }
+  $("stage").setAttribute("aria-label", "Leaderboard: " + agents.map((a, i) => `${ordinal(i + 1)} ${a.name} ${money(a.equity, 0)} (${pct(a.pnl_pct)})`).join(", "));
+}
+
+function celebrate(trade) {
+  const lane = document.querySelector(`.lane[data-name="${CSS.escape(trade.agent)}"]`);
+  if (!lane) return;
+  lane.classList.remove("hop"); void lane.offsetWidth; lane.classList.add("hop");
+  const pop = document.createElement("div");
+  const neg = trade.side === "sell" && (trade.pnl ?? 0) < 0;
+  pop.className = `pop ${trade.side}${neg ? " neg" : ""}`;
+  pop.textContent = trade.side === "buy" ? `Buy ${trade.symbol}` : `Sell ${signed(trade.pnl ?? 0)}`;
+  lane.appendChild(pop);
+  setTimeout(() => pop.remove(), 1900);
+}
+
+// a Claude went bust since the last refresh (its busts list grew; never on first load): shake its lane, pop "BUST", tell the plugins
+const bustCounts = new Map();
+function checkBusts() {
+  for (const a of data.agents) {
+    if (!Array.isArray(a.busts)) { bustCounts.delete(a.name); continue; }   // an older arena: nothing to compare against yet
+    const n = a.busts.length, before = bustCounts.get(a.name);
+    bustCounts.set(a.name, n);
+    if (before === undefined || n <= before) continue;
+    const lane = document.querySelector(`.lane[data-name="${CSS.escape(a.name)}"]`);
+    if (lane) {
+      lane.classList.remove("bust"); void lane.offsetWidth; lane.classList.add("bust");
+      const pop = document.createElement("div");
+      pop.className = "pop sell neg";
+      pop.textContent = "BUST";
+      lane.appendChild(pop);
+      setTimeout(() => { pop.remove(); lane.classList.remove("bust"); }, 1900);
+    }
+    emit("arena:bust", {agent: a.name, lives_left: a.lives_left ?? null, out: a.out === true, bust: a.busts[n - 1] || null});
+  }
+}
+
+/* ---------- feeds ---------- */
+const agentByName = name => data.agents.find(a => a.name === name) || {avatar: "claude"};
+function avatar(name, cls = "av") { return `<div class="${cls}">${spriteSVG(agentByName(name).avatar).replace('class="bob"', "")}</div>`; }
+
+// "Stop -20%, target +60%, trail 15%, wake -10% / +25%" from a position's or order's exit fields
+function exitsText(x) {
+  if (!x) return "";
+  const f = n => `${n > 0 ? "+" : ""}${Number(n).toLocaleString(undefined, {maximumFractionDigits: 1})}%`;
+  const wake = [x.wake_down_pct, x.wake_up_pct].filter(v => v != null).map(f).join(" / ");
+  return [x.stop_loss_pct != null && `stop ${f(x.stop_loss_pct)}`, x.take_profit_pct != null && `target ${f(x.take_profit_pct)}`,
+          x.trailing_pct != null && `trail ${Number(x.trailing_pct)}%`, wake && `wake ${wake}`].filter(Boolean).join(", ");
+}
+
+function orderLine(o) {
+  const side = o.action === "sell" ? "sell" : "buy";
+  const size = side === "buy" ? (Number(o.usd) ? money(Number(o.usd), 0) : "?")
+             : (Number(o.fraction ?? 1) >= .999 ? "All" : `${Math.round(Number(o.fraction) * 100)}%`);
+  const exits = side === "buy" ? exitsText(o) : "";
+  return `<li class="${o.rejected ? "no" : ""}" data-symbol="${esc(o.symbol || "")}"><span class="side ${side}">${side === "buy" ? "Buy" : "Sell"}</span>
+    <span class="sym">${esc(o.symbol || "?")}${o.moonshot ? ` <span class="moon">moonshot</span>` : ""}</span><span class="num">${size}</span><span class="why">${esc(o.reason)}${exits ? `<span class="exits">${esc(exits)}</span>` : ""}</span></li>`;
+}
+
+// "+20% in 5 min, $50k+ volume, $15k+ liquidity, green or yellow"
+function watchText(w) {
+  const k = n => n >= 1000 ? `$${Math.round(n / 1000)}k` : `$${Math.round(n)}`;
+  return [`+${Number(w.min_chg_5m)}% in 5 min`, `${k(w.min_vol_1h)}+ volume`, `${k(w.min_liquidity)}+ liquidity`,
+          (w.ratings || []).join(" or ")].join(", ");
+}
+
+function exitLine(x) {
+  return `<li class="${x.rejected ? "no" : ""}" data-symbol="${esc(x.symbol || "")}"><span class="side exit">Exits</span><span class="sym">${esc(x.symbol || "?")}</span>
+    <span class="num"></span><span class="why">${esc(exitsText(x) || "cleared")}</span></li>`;
+}
+
+function fixHint(err) {
+  if (/not logged in|login/i.test(err)) return " Run claude auth login in a terminal, then it retries on its own.";
+  return "";
+}
+
+function renderDecisions() {
+  const t = now();
+  const live = data.agents.filter(a => a.kind === "llm" && a.thinking_since).map(a => `
+    <article class="decision live" data-agent="${esc(a.name)}" style="--c:${colorOf(a)}">${avatar(a.name)}
+      <div class="head"><span class="who">${esc(a.name)}</span><span class="when">${since(a.thinking_since)} so far</span></div>
+      <p class="note"><span class="dots">Reading the market</span></p></article>`).join("");
+  const past = data.decisions.map(d => {
+    const a = agentByName(d.agent), fresh = !firstLoad && !seenDecisions.has(d.id);
+    if (fresh) emit("arena:decision", d);
+    seenDecisions.add(d.id);
+    if (d.error) return `
+      <article class="decision err${fresh ? " fresh" : ""}" data-agent="${esc(d.agent)}" data-id="${d.id}" style="--c:${colorOf(a)}">${avatar(d.agent)}
+        <div class="head"><span class="who">${esc(d.agent)}</span><span class="when">${ago(t - d.ts)}, call failed</span></div>
+        <p class="note">${esc(d.error)}${esc(fixHint(d.error))}</p></article>`;
+    const when = [`${ago(t - d.ts)}`, `thought for ${span(d.secs)}`, d.next_min ? `next look after ${span(d.next_min * 60)}` : ""].filter(Boolean).join(", ");
+    return `
+      <article class="decision${fresh ? " fresh" : ""}${d.orders.length ? " has-orders" : ""}" data-agent="${esc(d.agent)}" data-id="${d.id}" style="--c:${colorOf(a)}">${avatar(d.agent)}
+        <div class="head"><span class="who">${esc(d.agent)}</span><span class="when">${when}</span></div>
+        ${d.woke ? `<div class="woke">Woken early: ${esc(d.woke)}</div>` : ""}
+        <p class="note">${esc(d.note) || "No comment."}</p>
+        ${d.orders.length || (d.exits || []).length ? `<ul class="orders">${d.orders.map(orderLine).join("")}${(d.exits || []).map(exitLine).join("")}</ul>` : `<div class="when">No trades this time.</div>`}
+        ${d.watch ? `<div class="watching">Watching for ${esc(watchText(d.watch))}</div>` : ""}
+      </article>`;
+  }).join("");
+  const hasLLM = data.agents.some(a => a.kind === "llm");
+  setHTML($("decisions"), live + past || `<div class="empty">${hasLLM
+    ? "No Claude agent has made a call yet. Their first look starts on the first tick."
+    : "No Claude agents are running. See the README to log Claude Code in, then restart the arena."}</div>`);
+}
+
+function renderTrades() {
+  const newest = data.trades[0]?.id ?? 0;
+  const fresh = lastTradeId === null ? [] : data.trades.filter(t => t.id > lastTradeId);
+  setHTML($("trades"), data.trades.length ? data.trades.map(t => {
+    const a = agentByName(t.agent), isNew = fresh.includes(t);
+    return `<div class="trade${isNew ? " fresh" : ""}" data-agent="${esc(t.agent)}" data-token="${esc(t.token)}" data-side="${t.side}" data-id="${t.id}" style="--c:${colorOf(a)}">
+      <span class="t">${clock(t.ts)}</span>
+      <span class="what"><b>${esc(t.agent)}</b> ${t.side === "buy" ? `<span class="side buy">bought</span>` : `<span class="side sell">sold</span>`} ${esc(t.symbol)}</span>
+      <span class="amt">${money(t.usd)}${t.pnl == null ? "" : `<small class="${t.pnl >= 0 ? "pos" : "neg"}">${signed(t.pnl)}</small>`}</span>
+      <span class="why">${esc(t.reason)}</span></div>`;
+  }).join("") : `<div class="empty">No trades yet. Orders fill one tick after an agent places them.</div>`);
+  fresh.slice(0, 6).reverse().forEach(t => { celebrate(t); emit("arena:trade", t); });
+  lastTradeId = newest;
+}
+
+function renderTables() {
+  setHTML($("board"), data.agents.map((a, i) => `
+    <tr data-agent="${esc(a.name)}"${a.out === true ? ' class="out"' : ""} style="--c:${colorOf(a)}"><td>${ordinal(i + 1)}</td>
+      <td><div class="who-cell">${avatar(a.name)}<div><b>${esc(a.name)}</b>${heartsHTML(a)}${a.bio
+        ? `<div class="bio" title="${esc(a.description)}">${esc(a.bio)}</div>${a.catchphrase ? `<div class="desc">"${esc(a.catchphrase)}"</div>` : ""}`
+        : `<div title="${esc(a.description)}">${esc(a.description)}</div>`}</div></div></td>
+      <td class="n">${money(a.equity)}</td><td class="n ${a.pnl_pct >= 0 ? "pos" : "neg"}">${pct(a.pnl_pct)}</td>
+      <td class="n">${money(a.cash)}</td><td class="n">${a.trades}</td>
+      <td class="n">${a.win_rate == null ? "–" : a.win_rate + "%"}</td><td class="n">${a.max_dd.toFixed(1)}%</td></tr>`).join(""));
+  const holding = data.agents.filter(a => a.positions.length);
+  setHTML($("bags"), holding.map(a => `
+    <div class="panel bag" data-agent="${esc(a.name)}" style="--c:${colorOf(a)}"><h3>${esc(a.name)}</h3>
+      <table><thead><tr><th>Token</th><th class="n">Cost</th><th class="n">Value</th><th class="n">P&amp;L</th><th class="n">Held</th>${a.kind === "llm" ? "<th>Exits</th>" : ""}</tr></thead><tbody>
+      ${a.positions.map(p => `<tr data-token="${esc(p.token)}"><td><span class="rate r-${esc(p.rating)}" title="${esc(p.rating)} risk rating"></span>${esc(p.symbol)}${p.moonshot ? ` <span class="moon" title="Moonshot: a small position held for a big runner, stops kept wide">moonshot</span>` : ""}</td>
+        <td class="n">${money(p.cost)}</td><td class="n">${money(p.value)}</td>
+        <td class="n ${p.pnl_pct >= 0 ? "pos" : "neg"}">${pct(p.pnl_pct)}</td><td class="n">${span(p.held_min * 60)}</td>${a.kind === "llm" ? `<td class="exits-cell">${esc(exitsText(p.exits)) || "<span class=\"none\">None set</span>"}</td>` : ""}</tr>`).join("")}
+      </tbody></table></div>`).join(""));
+  const cash = data.agents.filter(a => !a.positions.length).map(a => a.name);
+  $("allcash").textContent = cash.length ? `All cash: ${cash.join(", ")}.` : "";
+}
+
+/* ---------- at a glance ---------- */
+function renderGlance() {
+  const agents = data.agents, lead = agents[0];
+  if (!lead) { setHTML($("glance"), ""); return; }
+  const teams = teamsOf(agents).map(t => ({...t, avg: t.list.reduce((s, a) => s + a.pnl_pct, 0) / t.list.length,
+                                            total: t.list.reduce((s, a) => s + a.equity - data.start_cash, 0),
+                                            best: t.list.reduce((m, a) => a.equity > m.equity ? a : m)}));
+  const top = teams.length > 1 ? teams.reduce((m, t) => t.avg > m.avg ? t : m) : null;
+  const leading = t => t === top && t.avg > Math.min(...teams.map(x => x.avg)) + 0.05;   // same rule as the stage's "Leading" tag
+  const pc = a => `<span class="${a.pnl_pct >= 0 ? "pos" : "neg"}">${pct(a.pnl_pct)}</span>`;
+  const leader = `<div class="gl-card leader" style="--hud:${colorOf(lead)}">
+      <div class="gl-k">Leading the arena</div>
+      <div class="gl-agent" data-agent="${esc(lead.name)}" style="--c:${colorOf(lead)}" tabindex="0" role="button">${avatar(lead.name)}<b>${esc(lead.name)}</b></div>
+      <div class="gl-d">${pc(lead)} · ${money(lead.equity, 0)} · ${teamName(teamOf(lead))}</div></div>`;
+  const card = t => `<div class="gl-card" data-team="${t.key}">
+      <div class="gl-k">${esc(t.title)}${leading(t) ? '<span class="leadtag">Leading</span>' : ""}</div>
+      <div class="gl-v ${t.avg >= 0 ? "pos" : "neg"}">${pct(t.avg)} <small>average</small></div>
+      <div class="gl-d">${t.list.length} agents · ${signed(t.total, 0)} together</div>
+      <div class="gl-agent" data-agent="${esc(t.best.name)}" style="--c:${colorOf(t.best)}" tabindex="0" role="button" title="Best on ${esc(t.title)}">${avatar(t.best.name)}<b>${esc(t.best.name)}</b>${pc(t.best)}</div></div>`;
+  setHTML($("glance"), leader + teams.map(card).join(""));
+}
+
+function renderMiniBoard() {
+  setHTML($("mini-board"), data.agents.map((a, i) => {
+    const out = a.out === true, lives = livesText(a);
+    return `
+    <div class="mini-row${out ? " out" : ""}" data-agent="${esc(a.name)}" style="--c:${colorOf(a)}" tabindex="0" role="button" aria-label="${esc(a.name)}, ${ordinal(i + 1)}, ${pct(a.pnl_pct)}${lives ? ", " + lives : ""}. Open profile">
+      <span class="rk">${ordinal(i + 1)}</span>${avatar(a.name)}
+      <span class="nm"><b>${esc(a.name)}${heartsHTML(a)}</b><small>${teamName(teamOf(a))}${typeof a.lives === "number" && typeof a.points === "number" ? ` · <span class="${a.points >= 0 ? "pos" : "neg"}" title="Game points: losses count less in early lives, +25% milestones pay">${a.points >= 0 ? "+" : ""}${a.points.toFixed(1)} pts</span>` : ""} · ${out ? `<span class="neg">Out</span>` : a.positions.length ? `${a.positions.length} open` : "all cash"} · ${a.trades} trade${a.trades === 1 ? "" : "s"}</small></span>
+      <span class="eq">${money(a.equity, 0)}</span><span class="pc ${a.pnl_pct >= 0 ? "pos" : "neg"}">${pct(a.pnl_pct)}</span></div>`;
+  }).join(""));
+}
+
+/* ---------- tab badges: new feed items since you last looked, and the 5-hour plan limit ---------- */
+let feedSeen = null;
+function markFeedSeen() {
+  if (!data) return;
+  feedSeen = {trade: data.trades[0]?.id ?? 0, decision: Math.max(0, ...data.decisions.map(d => d.id))};
+  const b = $("badge-feed"); b.textContent = ""; b.classList.remove("new");
+}
+function renderBadges() {
+  if (activeTab === "feed" || !feedSeen) { markFeedSeen(); return; }
+  const n = data.trades.filter(t => t.id > feedSeen.trade).length + data.decisions.filter(d => d.id > feedSeen.decision).length;
+  const b = $("badge-feed");
+  b.textContent = n ? (n > 99 ? "99+" : String(n)) : "";
+  b.classList.toggle("new", n > 0);
+  b.title = n ? `${n} new since you last looked` : "";
+}
+async function refreshUsageBadge() {
+  let u;
+  try { u = await (await fetch("/api/usage")).json(); } catch { return; }
+  const w = (u && u.plan && u.plan.windows || []).find(x => x.kind === "five_hour"), b = $("badge-usage");
+  b.className = "tab-badge" + (w ? (w.pct >= 80 ? " bad" : w.pct >= 50 ? " warn" : "") : "");
+  b.textContent = w ? `${Math.round(w.pct)}%` : "";
+  b.title = w ? `5-hour plan limit: ${Math.round(w.pct)}% used` : "";
+}
+
+/* ---------- tabs ---------- */
+const TABS = ["overview", "screens", "feed", "agents", "room", "traders", "analytics", "council", "usage"];
+let activeTab = null;
+function showTab(name, {focus = false, scroll = false} = {}) {
+  if (!TABS.includes(name)) name = "overview";
+  activeTab = name;
+  for (const t of TABS) {
+    const on = t === name, b = $("tabbtn-" + t);
+    b.setAttribute("aria-selected", String(on)); b.tabIndex = on ? 0 : -1; $("tab-" + t).hidden = !on;
+  }
+  if (focus) $("tabbtn-" + name).focus();
+  arenaPrefs.set("tab", name);
+  if (location.hash !== "#" + name) history.replaceState(null, "", "#" + name);
+  if (scroll) {   // switching from far down a long tab: start the new one at its top
+    const top = $("tabs").getBoundingClientRect().top + scrollY - 1;
+    if (scrollY > top) scrollTo({top});
+  }
+  if (name === "feed") markFeedSeen();
+  if (name === "overview" && chart) chart.resize();
+  emit("arena:tab", {tab: name});
+}
+$("tabs").addEventListener("click", e => { const b = e.target.closest(".tab"); if (b) showTab(b.dataset.tab, {scroll: true}); });
+$("tabs").addEventListener("keydown", e => {
+  const i = TABS.indexOf(activeTab);
+  const j = {ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: TABS.length - 1}[e.key];
+  if (j === undefined) return;
+  e.preventDefault(); e.stopPropagation();
+  showTab(TABS[(j + TABS.length) % TABS.length], {focus: true});
+});
+document.addEventListener("click", e => { const g = e.target.closest("[data-goto]"); if (g) { e.preventDefault(); showTab(g.dataset.goto, {scroll: true}); } });
+document.addEventListener("click", e => {   // in-tab jumps scroll without touching the URL (the hash names the tab)
+  const j = e.target.closest("[data-jump]"), el = j && $(j.dataset.jump);
+  if (el) el.scrollIntoView({behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start"});
+});
+window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+// Enter or Space on a glance card or standings row opens the profile, like a click
+document.addEventListener("keydown", e => {
+  if ((e.key === "Enter" || e.key === " ") && e.target.matches && e.target.matches(".mini-row, .gl-agent")) { e.preventDefault(); e.target.click(); }
+});
+
+/* ---------- settings menu ---------- */
+{
+  const btn = $("settings-btn"), panel = $("settings-panel");
+  const set = open => { panel.hidden = !open; btn.setAttribute("aria-expanded", String(open)); };
+  btn.addEventListener("click", () => set(panel.hidden));
+  document.addEventListener("click", e => { if (!panel.hidden && !e.target.closest("#settings-wrap")) set(false); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && !panel.hidden) { set(false); btn.focus(); } });
+}
+
+function renderHeader() {
+  const mode = $("mode");
+  mode.className = "mode" + (data.mock ? " mock" : "");
+  mode.querySelector("span").textContent = data.mock ? "Mock market" : "Live prices, fake money";
+  $("meta").innerHTML = [
+    ["Running", span(now() - data.started)], ["Agents", data.agents.length],
+    ["Tokens", data.tracked], ["Start", `${money(data.start_cash, 0)} each`],
+  ].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
+}
+
+/* ---------- chart ---------- */
+let lastSeries = null;
+const markerPrefs = Object.assign({on: true, agent: "all"}, arenaPrefs.get("chart.markers", {}) || {});
+
+// equity of one agent at a moment, read off its (downsampled) series: the marker sits on the line
+function equityAt(pts, ms) {
+  if (!pts || !pts.length) return null;
+  let lo = 0, hi = pts.length - 1;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (pts[mid][0] < ms) lo = mid + 1; else hi = mid; }
+  const b = pts[lo], a = pts[lo - 1];
+  if (!a || b[0] === ms) return b[1];
+  if (b[0] < ms) return b[1];
+  const f = (ms - a[0]) / Math.max(1, b[0] - a[0]);
+  return a[1] + (b[1] - a[1]) * f;
+}
+
+function markerDataset(series) {
+  if (!markerPrefs.on) return null;
+  const pts = [];
+  for (const t of data.trades) {
+    if (markerPrefs.agent !== "all" && t.agent !== markerPrefs.agent) continue;
+    const y = equityAt(series[t.agent], t.ts * 1000);
+    if (y == null) continue;
+    pts.push({x: t.ts * 1000, y, trade: t});
+  }
+  const sellColor = t => (t.pnl ?? 0) >= 0 ? "#59e3a7" : "#ff6b7a";
+  return {
+    label: "Trades", type: "scatter", data: pts, order: -1, marker: true,
+    pointStyle: "triangle", pointRadius: 5, pointHoverRadius: 7, pointBorderWidth: 1.5,
+    pointRotation: pts.map(p => p.trade.side === "buy" ? 0 : 180),
+    pointBackgroundColor: pts.map(p => p.trade.side === "buy" ? colorOf(agentByName(p.trade.agent)) : sellColor(p.trade)),
+    pointBorderColor: pts.map(p => p.trade.side === "buy" ? "#1b1640" : "#1b1640"),
+  };
+}
+
+// "Opus 5.5 sold WIF for $98.20, +$12.30, stop loss hit"
+function markerLabel(t) {
+  const verb = t.side === "buy" ? `bought ${t.symbol} for ${money(t.usd)}` : `sold ${t.symbol} for ${money(t.usd)}${t.pnl == null ? "" : `, ${signed(t.pnl)}`}`;
+  const lines = [`${t.agent} ${verb}`];
+  if (t.reason) lines.push(t.reason.length > 90 ? t.reason.slice(0, 88) + "…" : t.reason);
+  return lines;
+}
+
+// Teams view: one line per team, the average equity of its agents (sampled on a shared time grid)
+const chartView = {mode: arenaPrefs.get("chart.view", "teams") === "agents" ? "agents" : "teams"};
+const TEAM_LINE = {claude: "#f7c548", bots: "#c8d0e8", copy: "#ff5fd2"};
+function teamDatasets(series) {
+  const times = [...new Set(Object.values(series).flatMap(s => s.map(p => p[0])))].sort((a, b) => a - b);
+  const step = Math.max(1, Math.ceil(times.length / 500));
+  const grid = times.filter((_, i) => i % step === 0 || i === times.length - 1);
+  return teamsOf(data.agents).map(t => ({
+    label: t.title, team: true, borderColor: TEAM_LINE[t.key] || "#c8d0e8", backgroundColor: TEAM_LINE[t.key] || "#c8d0e8",
+    borderWidth: 3, pointRadius: 0, tension: 0.1, borderDash: t.key === "claude" ? undefined : t.key === "copy" ? [2, 3] : [6, 4],
+    data: grid.map(ms => {
+      const ys = t.list.map(a => equityAt(series[a.name], ms)).filter(y => y != null);
+      return ys.length ? {x: ms, y: ys.reduce((sum, y) => sum + y, 0) / ys.length} : null;
+    }).filter(Boolean),
+  }));
+}
+
+function buildDatasets(series) {
+  if (chartView.mode === "teams") return teamDatasets(series);
+  const datasets = [...data.agents].sort((a, b) => a.order - b.order).map(a => ({
+    label: a.name, data: (series[a.name] || []).map(([x, y]) => ({x, y})), borderColor: colorOf(a),
+    backgroundColor: colorOf(a), borderWidth: 2, pointRadius: 0, tension: 0.1,
+    borderDash: teamOf(a) === "claude" ? undefined : teamOf(a) === "copy" ? [2, 3] : [6, 4],   // Claude solid, bots dashed, copiers dotted: three teams at a glance
+  }));
+  const m = markerDataset(series);
+  if (m) datasets.push(m);
+  return datasets;
+}
+
+function syncMarkerTools() {
+  const sel = $("markers-agent"), btn = $("markers-toggle");
+  if (!sel || !data) return;
+  const names = [...data.agents].sort((a, b) => a.order - b.order).map(a => a.name);
+  const key = names.join("|");
+  if (sel._key !== key) {
+    sel._key = key;
+    sel.innerHTML = `<option value="all">all agents</option>` + names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  }
+  if (!names.includes(markerPrefs.agent)) markerPrefs.agent = "all";
+  document.querySelectorAll(".seg [data-view]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.view === chartView.mode)));
+  $("markers-wrap").hidden = chartView.mode === "teams";
+  $("chart-sub").textContent = chartView.mode === "teams"
+    ? "Each team's average equity per agent, since the arena started. Switch to Everyone for every agent's line and their trades."
+    : "Claude lines are solid, bot lines dashed, copy-trader lines dotted. Triangles mark fills: up for a buy, down for a sell.";
+  sel.value = markerPrefs.agent;
+  sel.disabled = !markerPrefs.on;
+  btn.setAttribute("aria-pressed", String(markerPrefs.on));
+}
+
+async function refreshChart() {
+  if (!data) return;
+  let series;
+  try { series = await (await fetch("/api/series")).json(); } catch { return; }
+  lastSeries = series;
+  syncMarkerTools();
+  const datasets = buildDatasets(series);
+  if (chart) { chart.data.datasets = datasets; chart.update("none"); return; }
+  Chart.defaults.font.family = "Rubik, system-ui, sans-serif";
+  Chart.defaults.color = "#a39dcb";
+  chart = new Chart($("chart"), {
+    type: "line", data: {datasets},
+    options: {
+      animation: false, maintainAspectRatio: false, interaction: {mode: "nearest", intersect: false},
+      scales: {
+        x: {type: "linear", ticks: {maxTicksLimit: 8, callback(v) {
+              const range = this.max - this.min, d = new Date(v);
+              if (range > 2 * 86400e3) return d.toLocaleDateString([], {month: "short", day: "numeric"}) + " " + d.toLocaleTimeString([], {hour: "numeric"});
+              return d.toLocaleTimeString([], range < 20 * 60e3 ? {hour: "numeric", minute: "2-digit", second: "2-digit"} : {hour: "numeric", minute: "2-digit"});
+            }}, grid: {color: "#2a2352"}},
+        y: {ticks: {callback: v => "$" + v.toLocaleString()}, grid: {color: "#2a2352"}},
+      },
+      plugins: {
+        legend: {labels: {color: "#eeeafb", boxWidth: 12, boxHeight: 12, filter: item => !item.text || item.text !== "Trades"}},
+        tooltip: {
+          backgroundColor: "#1b1640", borderColor: "#342c63", borderWidth: 1, titleColor: "#eeeafb", bodyColor: "#eeeafb", padding: 10,
+          callbacks: {
+            title: i => new Date(i[0].parsed.x).toLocaleString(),
+            label: i => i.dataset.marker ? markerLabel(i.raw.trade)
+                      : `${i.dataset.label}${i.dataset.team ? " (average)" : ""}: ${money(i.parsed.y)}`,
+          },
+        },
+      },
+    },
+  });
+}
+function rebuildMarkers() {
+  arenaPrefs.set("chart.markers", {on: markerPrefs.on, agent: markerPrefs.agent});
+  syncMarkerTools();
+  if (chart && lastSeries) { chart.data.datasets = buildDatasets(lastSeries); chart.update("none"); }
+}
+$("markers-toggle").addEventListener("click", () => { markerPrefs.on = !markerPrefs.on; rebuildMarkers(); });
+$("markers-agent").addEventListener("change", e => { markerPrefs.agent = e.target.value; rebuildMarkers(); });
+document.querySelectorAll(".seg [data-view]").forEach(b => b.addEventListener("click", () => {
+  chartView.mode = b.dataset.view; arenaPrefs.set("chart.view", chartView.mode); rebuildMarkers();
+}));
+
+/* ---------- CRT scanlines toggle (toolbar, off by default) ---------- */
+{
+  let crt = arenaPrefs.get("crt", false) === true;
+  const btn = document.createElement("button");
+  btn.type = "button"; btn.className = "tb-btn crt-btn"; btn.textContent = "Scanlines"; btn.title = "CRT scanline overlay";
+  const apply = () => { document.body.classList.toggle("crt", crt); btn.setAttribute("aria-pressed", String(crt)); };
+  btn.addEventListener("click", () => { crt = !crt; arenaPrefs.set("crt", crt); apply(); });
+  $("toolbar").appendChild(btn);
+  apply();
+}
+
+/* ---------- loop ---------- */
+async function refresh() {
+  try { data = await (await fetch("/api/summary")).json(); }
+  catch {
+    $("mode").className = "mode"; $("mode").querySelector("span").textContent = "Can't reach the arena. Is main.py running?";
+    return;
+  }
+  skew = data.now - Date.now() / 1000;
+  renderHeader(); renderStage(); checkBusts(); renderGlance(); renderDecisions(); renderTrades(); renderTables(); renderMiniBoard(); renderBadges(); tick();
+  emit("arena:data", data);
+  if (firstLoad) { firstLoad = false; refreshChart(); }
+}
+backdrop();
+showTab(TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : arenaPrefs.get("tab", "overview"));
+refresh();
+refreshUsageBadge();
+setInterval(refreshUsageBadge, 30000);
+setInterval(refresh, 3000);
+setInterval(refreshChart, 20000);
+setInterval(tick, 1000);
+window.addEventListener("resize", () => data && renderStage());
+// plugins: each file in static/plugins is optional and owns its own DOM and CSS
+["ticker", "fx", "commentary", "alerts", "agent-modal", "filters", "tokenchart", "stats", "health", "room", "council", "screens", "copy", "usage", "analytics", "reset"].forEach(n => {
+  const s = document.createElement("script");
+  s.src = `/static/plugins/${n}.js`;
+  s.onerror = () => {};
+  document.body.appendChild(s);
+});
+</script>
+</body>
+</html>

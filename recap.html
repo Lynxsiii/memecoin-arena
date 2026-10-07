@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daily recap – Memecoin Arena</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jersey+10&family=Rubik:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --night: #16122e; --dusk: #1f1a40; --seam: #342c63; --moon: #eeeafb; --haze: #a39dcb; --ink: #1b1640;
+          --profit: #59e3a7; --loss: #ff6b7a; --gold: #f7c548;
+          --pixel: "Jersey 10", "Rubik", system-ui, sans-serif; --body: "Rubik", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  * { box-sizing: border-box; }
+  html { background: var(--night); }
+  body { margin: 0; background: var(--night); color: var(--moon); font: 15px/1.5 var(--body); }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 22px 0 10px; }
+  h1 { font: 400 40px/1 var(--pixel); margin: 0; letter-spacing: .02em; }
+  h1 small { display: block; font: 400 13px/1.4 var(--body); color: var(--haze); margin-top: 4px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; align-items: center; }
+  input[type=date] { font: 400 14px/1 var(--body); color: var(--moon); background: var(--dusk); border: 1px solid var(--seam); padding: 7px 9px; border-radius: 3px; color-scheme: dark; }
+  .btn { font: 500 13px/1 var(--body); color: var(--moon); background: var(--dusk); border: 1px solid var(--seam); padding: 8px 10px; border-radius: 3px; cursor: pointer; text-decoration: none; }
+  .btn:hover { border-color: var(--haze); }
+  :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  h2 { font: 600 18px/1.3 var(--body); margin: 28px 0 4px; }
+  .sub { color: var(--haze); font-size: 13px; margin: 0 0 12px; }
+  .panel { background: var(--dusk); border: 1px solid var(--seam); border-radius: 4px; }
+  .summary { padding: 16px 18px; font-size: 16px; line-height: 1.6; }
+  .summary b { font-weight: 600; }
+  .teams { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 12px; }
+  .tile { padding: 14px 16px 12px; }
+  .tile .k { color: var(--haze); font-size: 12px; }
+  .tile .v { font: 400 38px/1 var(--pixel); font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .tile .d { color: var(--haze); font-size: 12px; margin-top: 4px; }
+  .pos { color: var(--profit); } .neg { color: var(--loss); } .dim { color: var(--haze); }
+  .tablewrap { overflow-x: auto; scrollbar-color: var(--seam) transparent; }
+  table { width: 100%; border-collapse: collapse; min-width: 640px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--seam); white-space: nowrap; font-size: 13px; }
+  th { color: var(--haze); font-weight: 500; font-size: 12px; }
+  tr:last-child td { border-bottom: 0; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  td.who b { font: 400 19px/1 var(--pixel); color: var(--c, var(--moon)); }
+  td.who small { display: block; color: var(--haze); font-size: 11px; }
+  tr.inactive td { opacity: .55; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 10px; }
+  .card { padding: 12px 14px; min-width: 0; box-shadow: inset 3px 0 0 var(--c, var(--seam)); }
+  .card .head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .card .head b { font: 400 19px/1 var(--pixel); color: var(--c, var(--moon)); }
+  .card .amt { font: 400 24px/1 var(--pixel); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .card .what { font-size: 13px; margin-top: 4px; }
+  .card .why { color: var(--haze); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+  .card .why q { color: var(--moon); font-style: italic; }
+  .list { padding: 0 14px; }
+  .list .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 0; border-bottom: 1px solid var(--seam); font-size: 13px; }
+  .list .row:last-child { border-bottom: 0; }
+  .list .row b { font: 400 18px/1 var(--pixel); color: var(--c, var(--moon)); margin-right: 8px; }
+  .list .row .why { grid-column: 1 / -1; color: var(--haze); font-size: 12px; }
+  .empty { color: var(--haze); font-size: 14px; padding: 16px; }
+  .warn { color: var(--gold); font-size: 13px; }
+  footer { color: var(--haze); font-size: 12px; padding: 32px 0 0; }
+  @media (max-width: 640px) { h1 { font-size: 32px; } .controls { margin-left: 0; width: 100%; } .tile .v { font-size: 30px; } }
+  @media print {
+    :root { --night: #ffffff; --dusk: #ffffff; --seam: #cfcbe3; --moon: #1b1640; --haze: #5b5590; --profit: #0f8a5a; --loss: #c0283b; --gold: #9a6b00; }
+    html, body { background: #fff; color: #1b1640; }
+    .controls, footer .nope { display: none; }
+    .panel { break-inside: avoid; border-color: #cfcbe3; }
+    .wrap { max-width: none; padding: 0; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Daily recap<small id="subtitle">Memecoin Arena · paper trading</small></h1>
+    <div class="controls">
+      <label for="day" class="dim" style="font-size:13px">Day</label>
+      <input type="date" id="day">
+      <button type="button" class="btn" id="print">Print or save as PDF</button>
+      <a class="btn" href="/">Dashboard</a>
+    </div>
+  </header>
+  <div id="status" class="empty">Loading…</div>
+  <div id="content" hidden>
+    <div class="panel summary" id="summary"></div>
+
+    <h2>Team totals</h2>
+    <p class="sub">Each team's combined result for the day and its equity at the end of it.</p>
+    <div class="teams" id="teams"></div>
+
+    <h2>Standings at the end of the day</h2>
+    <p class="sub">Equity when the day ended, with each agent's P&amp;L for the day and overall.</p>
+    <div class="panel tablewrap"><table><thead><tr><th>Rank</th><th>Agent</th><th class="n">Equity</th><th class="n">Day P&amp;L</th><th class="n">Overall</th><th class="n">Trades</th><th class="n">Closed</th><th class="n">Wins</th></tr></thead><tbody id="board"></tbody></table></div>
+
+    <h2>Best and worst trades of the day</h2>
+    <p class="sub">Closed trades only, by dollars made or lost, with the reason the agent gave.</p>
+    <div class="cards" id="trades"></div>
+
+    <h2>Notable Claude decisions</h2>
+    <p class="sub">The reasoning behind the Claude trades that moved the most money.</p>
+    <div class="panel list" id="notable"></div>
+
+    <h2>Luck check</h2>
+    <p class="sub">All-time P&amp;L with each agent's single best trade (closed or still open) removed. A lead that disappears here is one lucky trade.</p>
+    <div class="panel list" id="luck"></div>
+
+    <h2>Claude usage for the day</h2>
+    <p class="sub">Calls, Claude Code's API-price estimate, and the share of the weekly plan limit each Claude used.</p>
+    <div class="panel tablewrap"><table><thead><tr><th>Agent</th><th class="n">Calls</th><th class="n">Failed</th><th class="n">API-price $</th><th class="n">Share</th><th class="n">Weekly limit</th></tr></thead><tbody id="usage"></tbody></table></div>
+    <p class="sub" id="usage-note"></p>
+  </div>
+  <footer>Paper trading only: fake money, real (or mock) prices. Figures are the arena's own records; nothing here is financial advice.</footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+  const money = (n, d = 2) => n == null || !isFinite(n) ? "–" : (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString(undefined, {minimumFractionDigits: d, maximumFractionDigits: d});
+  const signed = (n, d = 2) => n == null || !isFinite(n) ? "–" : (n >= 0 ? "+" : "-") + money(Math.abs(n), d).slice(0);
+  const pct = n => n == null ? "" : `${n >= 0 ? "+" : ""}${Number(n).toFixed(1)}%`;
+  const cls = n => n == null ? "dim" : n >= 0 ? "pos" : "neg";
+  const clock = ts => new Date(ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  const COLORS = {opus: "#f7c548", fable: "#ff8c5a", sonnet: "#62c6ff", haiku: "#6fdcd9", "sonnet-degen": "#ff5fb4", "sonnet-skeptic": "#d4e86a",
+                  "sonnet-scalper": "#e97cff", claude: "#e8875e", robot: "#c8d0e8", monkey: "#ffb3d1", "monkey-green": "#d9b382", rocket: "#fff1a8",
+                  sniper: "#7f88b0", index: "#6b8cff", turtle: "#b488ff"};
+  const colorOf = a => COLORS[a && a.avatar] || "#c8d0e8";
+  const localDate = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+  const dayInput = $("day");
+  dayInput.value = new URLSearchParams(location.search).get("day") || localDate(new Date());
+  dayInput.max = localDate(new Date());
+  dayInput.addEventListener("change", load);
+  $("print").addEventListener("click", () => window.print());
+
+  async function getJSON(url) {
+    try { const r = await fetch(url, {cache: "no-store"}); if (!r.ok) return null; return await r.json(); } catch { return null; }
+  }
+
+  // Fallback when analytics.py isn't loaded yet: day P&L from the (downsampled) equity series and the last 150 trades.
+  function dayFromSeries(summary, series, from, to) {
+    const agents = summary.agents.map(a => {
+      const pts = (series && series[a.name]) || [];
+      const before = pts.filter(p => p[0] / 1000 < from), inDay = pts.filter(p => p[0] / 1000 >= from && p[0] / 1000 < to);
+      const start = before.length ? before[before.length - 1][1] : inDay.length ? summary.start_cash : null;
+      const endPts = pts.filter(p => p[0] / 1000 < to), end = endPts.length ? endPts[endPts.length - 1][1] : null;
+      const mine = summary.trades.filter(t => t.agent === a.name && t.ts >= from && t.ts < to), sells = mine.filter(t => t.side === "sell" && t.pnl != null);
+      return {name: a.name, team: a.team || (a.kind === "llm" ? "claude" : "bots"), kind: a.kind, avatar: a.avatar, active: inDay.length > 0,
+              equity_start: start, equity_end: end, pnl_day: start != null && end != null ? end - start : null,
+              pnl_total: end != null ? end - summary.start_cash : null, trades_day: mine.length, closed_day: sells.length,
+              wins_day: sells.filter(t => t.pnl > 0).length};
+    }).sort((a, b) => (b.equity_end ?? -1e18) - (a.equity_end ?? -1e18));
+    const trades = summary.trades.filter(t => t.ts >= from && t.ts < to);
+    return {agents, trades, notable: [], usage: null, partial: true};
+  }
+
+  function writeSummary(day, summary, analytics, dateLabel) {
+    const active = day.agents.filter(a => a.active && a.pnl_day != null);
+    if (!active.length) return `No agent was running on ${dateLabel}. Pick another day, or check that the arena was on.`;
+    const by = [...active].sort((a, b) => b.pnl_day - a.pnl_day), top = by[0], bottom = by[by.length - 1];
+    const team = t => { const xs = active.filter(a => a.team === t); return xs.length ? xs.reduce((s, a) => s + a.pnl_day, 0) / xs.length : 0; };
+    const c = team("claude"), b = team("bots"), haveClaudes = active.some(a => a.team === "claude");
+    const cp = team("copy"), haveCopy = active.some(a => a.team === "copy");
+    const sells = day.trades.filter(t => t.side === "sell" && t.pnl != null);
+    const best = sells.length ? sells.reduce((m, t) => t.pnl > m.pnl ? t : m) : null;
+    const worst = sells.length ? sells.reduce((m, t) => t.pnl < m.pnl ? t : m) : null;
+    const leader = day.agents[0];
+    const parts = [`<b>${esc(dateLabel)}</b>: ${active.length} agents traded ${day.trades.length} times and closed ${sells.length} positions.`];
+    if (haveClaudes) {
+      const rows = [["Team Claude", c, "the Claudes"], ["Team Bots", b, "the bots"]].concat(haveCopy ? [["Team Copy", cp, "the copy traders"]] : []);
+      const best = rows.reduce((x, y) => y[1] > x[1] ? y : x), level = rows.every(r => Math.abs(r[1] - best[1]) < 1);
+      parts.push(`Per agent, ${rows.map(r => `${r[0]} finished the day <b class="${cls(r[1])}">${signed(r[1], 0)}</b>`).join(", ")}, so ${level ? "the teams were level" : `${best[2]} won the day`}.`);
+    }
+    parts.push(`${esc(top.name)} had the best day (<span class="${cls(top.pnl_day)}">${signed(top.pnl_day, 0)}</span>)${bottom !== top ? ` and ${esc(bottom.name)} the worst (<span class="${cls(bottom.pnl_day)}">${signed(bottom.pnl_day, 0)}</span>)` : ""}.`);
+    if (best && best.pnl > 0) parts.push(`The biggest single win was ${esc(best.agent)} selling ${esc(best.symbol)} for <span class="pos">${signed(best.pnl, 0)}</span>${worst && worst.pnl < 0 ? `; the biggest loss was ${esc(worst.agent)} on ${esc(worst.symbol)}, <span class="neg">${signed(worst.pnl, 0)}</span>` : ""}.`);
+    if (leader && leader.equity_end != null) {
+      const la = analytics && analytics.agents.find(a => a.name === leader.name);
+      const share = la && la.luck && la.luck.share_of_pnl_from_best_trade;
+      parts.push(`${esc(leader.name)} leads overall at ${money(leader.equity_end, 0)} (${pct(leader.pnl_total / summary.start_cash * 100)})${share != null && share >= 0.5 ? `, though ${Math.round(Math.min(share, 1) * 100)}% of that lead is a single trade` : ""}.`);
+    }
+    if (day.usage && day.usage.calls) parts.push(`The Claudes made ${day.usage.calls} calls (${money(day.usage.cost)} at API prices${day.usage.weekly_pct_used != null ? `, about ${day.usage.weekly_pct_used.toFixed(1)}% of the weekly plan limit` : ""}).`);
+    return parts.join(" ");
+  }
+
+  async function load() {
+    const [y, m, d] = dayInput.value.split("-").map(Number);
+    const from = new Date(y, m - 1, d).getTime() / 1000, to = new Date(y, m - 1, d + 1).getTime() / 1000;
+    const dateLabel = new Date(y, m - 1, d).toLocaleDateString([], {weekday: "long", year: "numeric", month: "long", day: "numeric"});
+    history.replaceState(null, "", `?day=${dayInput.value}`);
+    $("status").hidden = false; $("status").textContent = "Loading…"; $("content").hidden = true;
+    const [summary, analytics, usage, series] = await Promise.all([
+      getJSON("/api/summary"), getJSON(`/api/analytics?from=${from}&to=${to}`), getJSON("/api/usage"), getJSON("/api/series")]);
+    if (!summary) { $("status").textContent = "Can't reach the arena. Is main.py running?"; return; }
+    const day = (analytics && analytics.day) || dayFromSeries(summary, series, from, to);
+    const byName = Object.fromEntries(summary.agents.map(a => [a.name, a]));
+    $("subtitle").textContent = `Memecoin Arena · ${summary.mock ? "mock market" : "live prices, fake money"} · ${dateLabel}`;
+    $("summary").innerHTML = writeSummary(day, summary, analytics, dateLabel) + (day.partial ? ` <span class="warn">Analytics aren't loaded on the server yet, so this recap uses the dashboard's summary data only (last 150 trades, sampled equity). Restart the arena for the full version.</span>` : "");
+
+    // team totals
+    const teams = [["claude", "Team Claude"], ["bots", "Team Bots"], ["copy", "Team Copy"]].filter(([k]) => day.agents.some(a => a.team === k)).map(([k, label]) => {
+      const xs = day.agents.filter(a => a.team === k && a.active && a.pnl_day != null);
+      const eq = day.agents.filter(a => a.team === k && a.equity_end != null).reduce((s, a) => s + a.equity_end, 0);
+      return xs.length ? `<div class="panel tile"><div class="k">${label} · day</div><div class="v ${cls(xs.reduce((s, a) => s + a.pnl_day, 0))}">${signed(xs.reduce((s, a) => s + a.pnl_day, 0), 0)}</div><div class="d">${xs.length} agents · ${money(eq, 0)} equity at the end of the day</div></div>` : "";
+    }).join("");
+    $("teams").innerHTML = teams || `<div class="panel tile"><div class="k">Nobody ran that day</div></div>`;
+
+    // standings
+    const rows = day.agents.filter(a => a.equity_end != null);
+    $("board").innerHTML = rows.length ? rows.map((a, i) => `<tr class="${a.active ? "" : "inactive"}" style="--c:${colorOf(byName[a.name] || a)}">
+      <td>${i + 1}</td><td class="who"><b>${esc(a.name)}</b><small>${({claude: "Team Claude", bots: "Team Bots", copy: "Team Copy"})[a.team] || "Team Bots"}${a.active ? "" : " · not running that day"}</small></td>
+      <td class="n">${money(a.equity_end)}</td><td class="n ${cls(a.pnl_day)}">${a.pnl_day == null ? "–" : `${signed(a.pnl_day)} <span class="dim">${pct(a.pnl_day_pct)}</span>`}</td>
+      <td class="n ${cls(a.pnl_total)}">${signed(a.pnl_total)}</td><td class="n">${a.trades_day}</td><td class="n">${a.closed_day}</td><td class="n">${a.wins_day}</td></tr>`).join("")
+      : `<tr><td colspan="8" class="empty">No equity records for this day.</td></tr>`;
+
+    // best and worst trades
+    const sells = day.trades.filter(t => t.side === "sell" && t.pnl != null).sort((a, b) => b.pnl - a.pnl);
+    const pick = [...sells.slice(0, 3), ...sells.slice(-3).filter(t => !sells.slice(0, 3).includes(t))];
+    $("trades").innerHTML = pick.length ? pick.map(t => `<div class="panel card" style="--c:${colorOf(byName[t.agent])}">
+      <div class="head"><b>${esc(t.agent)}</b><span class="amt ${cls(t.pnl)}">${signed(t.pnl)}</span></div>
+      <div class="what">Sold ${esc(t.symbol)} for ${money(t.usd)} at ${clock(t.ts)}</div>
+      <div class="why">${t.reason ? `<q>${esc(t.reason)}</q>` : "No reason given."}</div></div>`).join("")
+      : `<div class="panel empty">No positions were closed on this day.</div>`;
+
+    // notable Claude decisions
+    const notable = day.notable && day.notable.length ? day.notable
+      : sells.filter(t => (byName[t.agent] || {}).kind === "llm").sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl)).slice(0, 6);
+    $("notable").innerHTML = notable.length ? notable.map(t => `<div class="row" style="--c:${colorOf(byName[t.agent])}">
+      <span><b>${esc(t.agent)}</b> sold ${esc(t.symbol)} at ${clock(t.ts)}</span><span class="${cls(t.pnl)}">${signed(t.pnl)}</span>
+      <span class="why">${t.reason ? `Order reason: <q>${esc(t.reason)}</q>` : ""}${t.note ? ` · Its note at the time: <q>${esc(t.note)}</q>` : ""}</span></div>`).join("")
+      : `<div class="empty">No Claude closed a position on this day.</div>`;
+
+    // luck check (all-time, from analytics)
+    if (analytics && analytics.agents) {
+      $("luck").innerHTML = analytics.agents.map(a => {
+        const L = a.luck, share = L.share_of_pnl_from_best_trade;
+        const best = L.best_open && (!L.best_trade || L.best_open.pnl > L.best_trade.pnl) ? L.best_open : L.best_trade;
+        let verdict = "No winning trade yet.";
+        if (best && a.pnl <= 0) verdict = `Behind even counting its best trade, ${esc(best.symbol)} ${signed(best.pnl, 0)}.`;
+        else if (best && share != null) verdict = share >= 1 ? `The whole lead is one trade: ${esc(best.symbol)} ${signed(best.pnl, 0)}${best.kind === "open" ? ", still open" : ""}. Without it: ${signed(L.pnl_ex_best_any, 0)}.`
+          : share >= 0.5 ? `${Math.round(share * 100)}% of the lead is one trade (${esc(best.symbol)}). Without it: ${signed(L.pnl_ex_best_any, 0)}.`
+          : `Spread out: the best trade (${esc(best.symbol)}) is ${Math.round(share * 100)}% of the lead. Without it: ${signed(L.pnl_ex_best_any, 0)}.`;
+        return `<div class="row" style="--c:${colorOf(a)}"><span><b>${esc(a.name)}</b>${verdict}</span><span class="${cls(a.pnl)}">${signed(a.pnl, 0)} overall</span></div>`;
+      }).join("");
+    } else $("luck").innerHTML = `<div class="empty">Luck checks need analytics.py loaded on the server.</div>`;
+
+    // usage for the day
+    const u = day.usage;
+    if (u && u.agents && u.agents.length) {
+      $("usage").innerHTML = u.agents.map(r => `<tr style="--c:${colorOf(byName[r.name])}"><td class="who"><b>${esc(r.name)}</b></td><td class="n">${r.calls}</td><td class="n ${r.errors ? "neg" : ""}">${r.errors}</td>
+        <td class="n">${money(r.cost)}</td><td class="n">${Math.round(r.share * 100)}%</td><td class="n">${r.weekly_pct == null ? "–" : r.weekly_pct.toFixed(2) + "%"}</td></tr>`).join("")
+        + `<tr><td class="who"><b>All Claudes</b></td><td class="n">${u.calls}</td><td class="n">${u.errors}</td><td class="n">${money(u.cost)}</td><td class="n">100%</td><td class="n">${u.weekly_pct_used == null ? "–" : u.weekly_pct_used.toFixed(2) + "%"}</td></tr>`;
+      $("usage-note").textContent = u.weekly_pct_used == null ? (u.readings ? "Weekly-limit use for the day can't be derived: the readings span a plan reset or there is only one. The last reading that day put the weekly limit at " + (u.weekly_pct_at_end == null ? "–" : u.weekly_pct_at_end.toFixed(1) + "%") + "." : "No plan-limit readings were recorded that day.")
+        : `Weekly limit at the end of the day: ${u.weekly_pct_at_end.toFixed(1)}%. Per-agent shares split the day's rise by each Claude's share of the arena's API-price spend.`;
+    } else {
+      const todays = usage && usage.agents ? usage.agents : [];
+      $("usage").innerHTML = todays.length && !u ? todays.map(r => `<tr><td class="who"><b>${esc(r.name)}</b></td><td class="n">${r.calls}</td><td class="n">${r.errors}</td><td class="n">${money(r.cost_24h)}</td><td class="n">${Math.round((r.share_24h || 0) * 100)}%</td><td class="n">${r.est_weekly_pct_per_day == null ? "–" : r.est_weekly_pct_per_day.toFixed(2) + "%"}</td></tr>`).join("")
+        : `<tr><td colspan="6" class="empty">No Claude calls on this day.</td></tr>`;
+      $("usage-note").textContent = todays.length && !u ? "Without analytics.py loaded, these are the last 24 hours rather than the chosen day." : "";
+    }
+    $("status").hidden = true; $("content").hidden = false;
+  }
+  load();
+})();
+</script>
+</body>
+</html>

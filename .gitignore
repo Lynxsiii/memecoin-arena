@@ -1,0 +1,15 @@
+arena.db
+arena_mock.db
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+recordings/
+journal_backups/
+logs/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+stop.flag
+.superpowers/

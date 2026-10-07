@@ -1,0 +1,1 @@
+{ "name": "arena-usage", "version": "0.1.1", "description": "Live usage and controls for the memecoin arena's Claude agents", "author": { "name": "memecoin-arena" }, "types": "./types/index.d.ts" }
