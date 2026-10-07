@@ -32,7 +32,8 @@ Discovery (where tracked tokens come from; every token carries `source` and `fir
     side of the pool: SOL, USDC, USDT and other majors are never tracked, and pools with under
     ARENA_ORGANIC_MIN_LIQ of reserves are ignored (the volume rankings are full of $0-liquidity wash-traded
     shells). A 429 pauses GeckoTerminal for 60 s, doubling up to 10 minutes while it keeps happening; any
-    failure just means no organic discoveries this cycle. Prices for every token still come from DexScreener.
+    failure just means no organic discoveries this cycle. Prices for every token still come from DexScreener,
+    with GeckoTerminal as the fallback for the tokens it returns nothing for (see ARENA_GECKO_FALLBACK).
   - "both": found by both feeds (sticky once set).
   - "graduated": a pump.fun token that just migrated to its PumpSwap pool (PumpPortal's free migration stream,
     see pumpfun.py). Every graduation is tracked; DexScreener prices the pool (dexId "pumpswap").
@@ -62,6 +63,17 @@ Discovery (where tracked tokens come from; every token carries `source` and `fir
                                 1 = organic only).
   ARENA_ORGANIC_MIN_LIQ=5000    GeckoTerminal pools with fewer dollars of reserves than this are not tracked.
   ARENA_GECKO_URL               GeckoTerminal base URL, default https://api.geckoterminal.com/api/v2.
+  ARENA_GECKO_FALLBACK=1        0/off disables the price fallback. On: whenever DexScreener returns nothing for some
+                                tokens (its 2026-10-07 outage answered [] for every token, SOL included), those are
+                                priced from their GeckoTerminal top pool instead (tokens/multi finds the pool,
+                                pools/multi prices it; the token carries price_source "gecko"). Pools are cached
+                                for 10 minutes (so graduations are picked up), "no pool" answers for 2 minutes.
+                                Never raises; skipped while a GeckoTerminal 429 back-off is running.
+  ARENA_GECKO_FALLBACK_CALLS=10 max GeckoTerminal requests per price fetch for the fallback. Budget: with 150
+                                tracked tokens and every pool cached the steady state is 5-6 pools/multi requests
+                                per 30-second refresh (about 10-12 a minute, plus 1-2 per fast exit check for held
+                                tokens), under the free tier's ~30 a minute; a 429 pauses GeckoTerminal (organic
+                                discovery included) for 60 s, doubling up to 10 minutes.
   ARENA_PUMPFUN=1               0/off: no pump.fun feed, no pump.fun tokens, their slots go back to the others
                                 (also read by pumpfun.py, which has the websocket settings).
   ARENA_PUMPFUN_SHARE=0.2       share of max_tracked kept for pump.fun tokens (graduated + launches).
@@ -94,6 +106,7 @@ import os
 import random
 import time
 from collections import deque
+from datetime import datetime, timezone
 
 import requests
 
@@ -173,6 +186,13 @@ SOURCE_GROUP = {"promoted": "promoted", "organic": "organic", "both": "both", "p
 GROUPS = ("organic", "promoted", "pumpfun")
 RUG_CHECKS = int(float(os.environ.get("ARENA_RUG_CHECKS", "4") or 0))
 RUG_CHECK_SECS = float(os.environ.get("ARENA_RUG_CHECK_SECS", "1800") or 1800)
+
+GECKO_FALLBACK = os.environ.get("ARENA_GECKO_FALLBACK", "1").strip().lower() not in ("0", "off", "false", "no")
+GECKO_FALLBACK_MAX_CALLS = max(0, int(float(os.environ.get("ARENA_GECKO_FALLBACK_CALLS", "10") or 0)))
+GECKO_POOL_TTL = 600         # seconds a mint's GeckoTerminal top pool stays cached (a curve can graduate)
+GECKO_NOPOOL_TTL = 120       # seconds a "GeckoTerminal has no pool for it" answer is trusted
+GECKO_MULTI = 30             # addresses per tokens/multi or pools/multi request
+GECKO_DEX = {"pump-swap": "pumpswap"}  # GeckoTerminal dex ids that DexScreener spells differently
 
 JUP_ON = os.environ.get("ARENA_JUPITER", "1").strip().lower() not in ("0", "off", "false", "no")
 JUP_URL = os.environ.get("ARENA_JUPITER_URL", "https://lite-api.jup.ag/swap/v1/quote")
@@ -331,6 +351,82 @@ def parse_pair(p):
     }
 
 
+def _gecko_id(rel):
+    """Address from a GeckoTerminal reference ({"data": {"id": "solana_<address>"}}), or None."""
+    ident = (((rel or {}).get("data") or {}).get("id") or "")
+    return ident.partition("_")[2] or None
+
+
+def _iso_ts(s):
+    """Epoch seconds from an ISO 8601 timestamp such as "2023-07-05T14:41:09Z", or None."""
+    if not isinstance(s, str) or not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def parse_gecko_pool(pool, token_meta=None):
+    """One GeckoTerminal pool (an entry of /pools/multi) -> the token dict parse_pair builds, plus
+    price_source "gecko". token_meta = {"address", "symbol", "name", "supply"} from the token lookup (all optional).
+    The token is token_meta's address when given (None if the pool does not hold it), else the memecoin side of the
+    pool. When it is the quote token (a "SOL / TOKEN" pool) the quote price is used, the market cap is that price
+    times token_meta's supply (0 if unknown) and the price changes are 0 (GeckoTerminal reports them for the base
+    token)."""
+    meta = token_meta or {}
+    attrs = pool.get("attributes") or {}
+    rel = pool.get("relationships") or {}
+    base, quote = _gecko_id(rel.get("base_token")), _gecko_id(rel.get("quote_token"))
+    mint = meta.get("address")
+    if mint:
+        if base == mint:
+            swap = False
+        elif quote == mint:
+            swap = True
+        else:
+            return None
+    else:
+        swap = base in MAJORS and quote is not None and quote not in MAJORS
+    parts = [s.strip() for s in (attrs.get("name") or "").split(" / ")]
+    side = (parts[1] if swap and len(parts) > 1 else parts[0]) or ""
+    pair = attrs.get("address") or _gecko_id({"data": pool})
+    dex = ((rel.get("dex") or {}).get("data") or {}).get("id")
+    price = _f(attrs.get("quote_token_price_usd" if swap else "base_token_price_usd"))
+    if swap:
+        mcap, ch = price * _f(meta.get("supply")), {}
+    else:
+        mcap, ch = _f(attrs.get("market_cap_usd") or attrs.get("fdv_usd")), attrs.get("price_change_percentage") or {}
+    tx = (attrs.get("transactions") or {}).get("h1") or {}
+    vol = attrs.get("volume_usd") or {}
+    created = _iso_ts(attrs.get("pool_created_at"))
+    now = time.time()
+    return {
+        "address": quote if swap else base,
+        "symbol": meta.get("symbol") or side or "?",
+        "name": meta.get("name") or side,
+        "pair": pair,
+        "dex": GECKO_DEX.get(dex, dex),
+        "price": price,
+        "liquidity": _f(attrs.get("reserve_in_usd")),
+        "mcap": mcap,
+        "vol_h1": _f(vol.get("h1")),
+        "vol_h24": _f(vol.get("h24")),
+        "buys_h1": int(_f(tx.get("buys"))),
+        "sells_h1": int(_f(tx.get("sells"))),
+        "chg_m5": _f(ch.get("m5")),
+        "chg_h1": _f(ch.get("h1")),
+        "chg_h24": _f(ch.get("h24")),
+        "age_min": (now - created) / 60 if created else None,
+        "url": f"https://www.geckoterminal.com/solana/pools/{pair}" if pair else "",
+        "updated": now,
+        "price_source": "gecko",
+    }
+
+
 class LiveMarket:
     """Discovers Solana tokens (DexScreener promotions + GeckoTerminal organic listings) and keeps their prices
     fresh from DexScreener."""
@@ -363,6 +459,12 @@ class LiveMarket:
         self.gecko_backoff = 0.0       # current GeckoTerminal pause length (doubles on repeated 429s)
         self.gecko_backoff_until = 0.0
         self.gecko_stats = {"requests": 0, "ok": 0, "rate_limited": 0, "errors": 0, "skipped": 0}
+        # GeckoTerminal price fallback (_gecko_fallback): mint -> top pool address, mint -> symbol / name /
+        # decimals / supply, mint -> when the cached lookup expires (also set for "no pool" answers)
+        self.pool_of = {}
+        self.gecko_meta = {}
+        self.pool_until = {}
+        self.gecko_fallback_stats = {"tokens": 0, "priced": 0, "calls": 0, "skipped": 0}
         self.rug_stats = {"requests": 0, "ok": 0, "pending": 0, "errors": 0}
         self.pump = None                # the shared PumpFeed, started lazily by the first real discovery
         self.pump_since = {"new": 0.0, "grad": 0.0}  # feed timestamps already consumed
@@ -562,7 +664,7 @@ class LiveMarket:
             self.gecko_backoff = min(600.0, self.gecko_backoff * 2 if self.gecko_backoff else 60.0)
             pause = max(self.gecko_backoff, _f(r.headers.get("Retry-After")))
             self.gecko_backoff_until = now + pause
-            print(f"[market] rate limited by GeckoTerminal, pausing organic discovery for {pause:.0f}s")
+            print(f"[market] rate limited by GeckoTerminal, pausing discovery + price fallback for {pause:.0f}s")
             return None
         try:
             r.raise_for_status()
@@ -578,9 +680,7 @@ class LiveMarket:
     @staticmethod
     def _gecko_mint(rel):
         """Mint address from a pool relationship ({"data": {"id": "solana_<mint>"}}), or None."""
-        ident = (((rel or {}).get("data") or {}).get("id") or "")
-        _, _, mint = ident.partition("_")
-        return mint or None
+        return _gecko_id(rel)
 
     def _discover_gecko(self):
         """Organic listings: the memecoin side of each trending / new pool, best-ranked first."""
@@ -699,12 +799,96 @@ class LiveMarket:
                 a = t["address"]
                 if a in wanted and t["price"] > 0 and (a not in best or t["liquidity"] > best[a]["liquidity"]):
                     best[a] = t
+        missing = [a for a in dict.fromkeys(addrs) if a not in best]
+        if GECKO_FALLBACK and missing and time.time() >= self.gecko_backoff_until:
+            try:
+                extra = self._gecko_fallback([a for a in missing if plausible_mint(a)])
+            except Exception as e:  # the fallback must never cost the DexScreener result
+                self.gecko_stats["errors"] += 1
+                print(f"[market] GeckoTerminal price fallback failed: {str(e)[:120]}")
+                extra = {}
+            if extra:
+                best.update(extra)
+                print(f"[market] DexScreener returned nothing for {len(missing)} tokens; "
+                      f"priced {len(extra)} via GeckoTerminal")
         # DexScreener reports no liquidity for pump.fun bonding curves: fill in the curve's own depth
         sol = (best.get(SOL_MINT) or {}).get("price") or self._sol_price()
         for t in best.values():
             if t.get("dex") == "pumpfun" and not t.get("liquidity"):
                 t["liquidity"] = curve_liquidity_usd(t.get("mcap"), sol)
         return best
+
+    def _gecko_fallback(self, missing):
+        """Price `missing` mints (DexScreener returned nothing for them) from their GeckoTerminal top pool, with at
+        most GECKO_FALLBACK_MAX_CALLS requests: tokens/multi finds (and caches) each mint's top pool, pools/multi
+        prices the pools. A pools request goes out as soon as 30 cached pools are waiting (or on the last request),
+        so even a cold cache prices tokens on the first call; SOL goes first (curve liquidity needs it).
+        Returns {mint: token dict} (see parse_gecko_pool). May raise: _fetch_pairs catches."""
+        now = time.time()
+        for a in [a for a, until in self.pool_until.items() if until <= now]:
+            del self.pool_until[a]
+            self.pool_of.pop(a, None)
+            self.gecko_meta.pop(a, None)
+        stats = self.gecko_fallback_stats
+        stats["tokens"] += len(missing)
+        order = sorted(dict.fromkeys(missing), key=lambda a: a != SOL_MINT)
+        lookup = [a for a in order if a not in self.pool_until]
+        ready = [a for a in order if a in self.pool_of]
+        stats["skipped"] += len(order) - len(lookup) - len(ready)  # known: GeckoTerminal has no pool for them
+        out, calls = {}, 0
+        while calls < GECKO_FALLBACK_MAX_CALLS and (lookup or ready):
+            last = calls == GECKO_FALLBACK_MAX_CALLS - 1
+            calls += 1
+            stats["calls"] += 1
+            if lookup and len(ready) < GECKO_MULTI and not (last and ready):
+                batch, lookup = lookup[:GECKO_MULTI], lookup[GECKO_MULTI:]
+                data = self._gecko_get(f"/networks/solana/tokens/multi/{','.join(batch)}")
+                if not isinstance(data, dict):
+                    if time.time() < self.gecko_backoff_until:
+                        break
+                    continue
+                for tok in data.get("data") or []:
+                    if not isinstance(tok, dict):
+                        continue
+                    attrs, rel = tok.get("attributes") or {}, tok.get("relationships") or {}
+                    mint = attrs.get("address") or _gecko_id({"data": tok})
+                    if mint not in batch:
+                        continue
+                    top = ((rel.get("top_pools") or {}).get("data") or [])
+                    pool = _gecko_id({"data": top[0]}) if top and isinstance(top[0], dict) else None
+                    price, fdv = _f(attrs.get("price_usd")), _f(attrs.get("fdv_usd"))
+                    self.gecko_meta[mint] = {"symbol": attrs.get("symbol"), "name": attrs.get("name"),
+                                             "decimals": attrs.get("decimals"),
+                                             "supply": fdv / price if price > 0 and fdv > 0 else None}
+                    if pool:  # GeckoTerminal lists top pools best (deepest) first
+                        self.pool_of[mint] = pool
+                        ready.append(mint)
+                for a in batch:
+                    if a in self.pool_of:
+                        self.pool_until[a] = now + GECKO_POOL_TTL
+                    else:
+                        self.pool_until[a] = now + GECKO_NOPOOL_TTL
+                        stats["skipped"] += 1
+            else:
+                batch, ready = ready[:GECKO_MULTI], ready[GECKO_MULTI:]
+                pools = {}
+                for a in batch:
+                    pools.setdefault(self.pool_of[a], []).append(a)
+                data = self._gecko_get(f"/networks/solana/pools/multi/{','.join(pools)}")
+                if not isinstance(data, dict):
+                    if time.time() < self.gecko_backoff_until:
+                        break
+                    continue
+                for p in data.get("data") or []:
+                    if not isinstance(p, dict):
+                        continue
+                    pid = (p.get("attributes") or {}).get("address") or _gecko_id({"data": p})
+                    for a in pools.get(pid, ()):
+                        t = parse_gecko_pool(p, {**self.gecko_meta.get(a, {}), "address": a})
+                        if t and t["price"] > 0:
+                            out[a] = t
+        stats["priced"] += len(out)
+        return out
 
     def _check_risk(self, addr):
         """Mint account info from the RPC: authorities and the token's decimals (needed for router quotes)."""

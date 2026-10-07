@@ -6,6 +6,9 @@ import pytest
 # Must be set before any project module (market -> pumpfun) is imported,
 # so no test opens the pump.fun websocket.
 os.environ.setdefault("ARENA_PUMPFUN", "0")
+# ...and no LiveMarket test reaches the real GeckoTerminal through the price fallback when its fake DexScreener
+# leaves tokens unpriced (test_gecko_fallback.py turns it on with fake GeckoTerminal answers).
+os.environ.setdefault("ARENA_GECKO_FALLBACK", "0")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
