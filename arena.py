@@ -9,6 +9,9 @@ Settings (environment variables, read when the Arena is built):
   ARENA_FAST_EXIT_SECS=10   seconds between fast exit checks inside a tick (0 disables them). Each check costs
                             one DexScreener request per 30 held tokens in the live market and nothing in the mock.
   ARENA_SHADOW_LEADERS=10   how many top wallets a shadow trader follows (its leader set, re-picked every 6 hours).
+  ARENA_MAX_BUYS_PER_DAY=6, ARENA_MIN_BUY_USD=50, ARENA_BUY_COOLDOWN_MIN=30   churn control for Claudes (not bots): at most
+                            this many buys in a rolling 24 hours, none smaller than the minimum, this many minutes between
+                            buys (0 turns a rule off). A refused buy is listed in acct["recent_failures"] with the reason.
 Execution friction (failed transactions, MEV slippage, fees) is configured in exchange.py; Jupiter quotes in
 market.py. A failed transaction trades nothing, costs the network fee, is counted in acct["failed"] and
 listed in acct["recent_failures"], which view() passes to agents as "recent_failures".
@@ -73,6 +76,11 @@ LADDER_TRAIL = [(10.0, 15.0), (5.0, 20.0), (2.0, 30.0)]          # (peak multipl
 TIME_STOP_H = float(os.environ.get("ARENA_TIME_STOP_H", "6") or 6)
 LIQ_EXIT = 0.5          # sell everything when the pool's liquidity falls under half of what it was at entry
 CREATOR_SELL_USD = float(os.environ.get("ARENA_CREATOR_SELL_USD", "100") or 100)
+# Churn control for Claudes (bots are exempt): every round trip costs about 5 % in fees and slippage, so a Claude may make at
+# most MAX_BUYS_PER_DAY buys in any rolling 24 hours, none under MIN_BUY_USD, and must wait BUY_COOLDOWN_MIN minutes between buys.
+MAX_BUYS_PER_DAY = max(0, int(os.environ.get("ARENA_MAX_BUYS_PER_DAY", "6") or 0))
+MIN_BUY_USD = max(0.0, float(os.environ.get("ARENA_MIN_BUY_USD", "50") or 0))
+BUY_COOLDOWN_MIN = max(0.0, float(os.environ.get("ARENA_BUY_COOLDOWN_MIN", "30") or 0))
 SHADOW_LEADERS = int(os.environ.get("ARENA_SHADOW_LEADERS", "10") or 10)  # wallets in a shadow trader's leader set
 
 
@@ -768,6 +776,10 @@ class Arena:
                 if o.get("symbol") in (None, "?"):
                     o["symbol"] = (self.market.get(o["token"]) or {}).get("symbol", "?")
                 return None
+            if agent.kind == "llm":
+                text = self._churn_refusal(agent.name, o, usd, view["now"])
+                if text:
+                    return self._refuse(agent.name, o, text, view["now"])
             if o.get("moonshot") and agent.kind == "llm" and MOONSHOT_SLOTS:
                 acct = self.accounts[agent.name]
                 moons = sum(1 for p in acct["positions"].values() if p.get("moonshot")) + \
@@ -799,6 +811,47 @@ class Arena:
             except (TypeError, ValueError):
                 o["fraction"] = 1.0
         return o
+
+    def _churn_refusal(self, name, o, usd, now):
+        """Why a Claude's buy breaks the churn rules (minimum size, then 24 hour cap, then cooldown), or None if it doesn't.
+        Buys already queued for the next fill count too, as if they had just happened."""
+        if not (MIN_BUY_USD or MAX_BUYS_PER_DAY or BUY_COOLDOWN_MIN):
+            return None
+        symbol = o.get("symbol")
+        if symbol in (None, "?"):
+            symbol = (self.market.get(o["token"]) or {}).get("symbol") or str(o["token"])[:6]
+        what = f"your buy of {symbol} (${usd:.0f}) was refused"
+        if MIN_BUY_USD and usd < MIN_BUY_USD:
+            return f"{what}: under the ${MIN_BUY_USD:.0f} minimum"
+        with self.db.lock:
+            n, last = self.db.conn.execute("SELECT COUNT(*), MAX(ts) FROM trades WHERE agent=? AND side='buy' AND ts>=?",
+                                           (name, now - 86400)).fetchone()
+        queued = sum(1 for n2, x in self.pending if n2 == name and x.get("action") == "buy")
+        n += queued
+        if queued:
+            last = now
+        if MAX_BUYS_PER_DAY and n >= MAX_BUYS_PER_DAY:
+            return f"{what}: {n} buys in the last 24 hours (limit {MAX_BUYS_PER_DAY})"
+        if BUY_COOLDOWN_MIN and last is not None and now - last < BUY_COOLDOWN_MIN * 60:
+            return f"{what}: {(now - last) / 60:.0f} minutes since your last buy ({BUY_COOLDOWN_MIN:g} minute cooldown)"
+        return None
+
+    def _refuse(self, name, o, text, now):
+        """Records a refused buy in the agent's recent_failures (shown back to it by view()) and returns None."""
+        symbol = o.get("symbol")
+        if symbol in (None, "?"):
+            symbol = o["symbol"] = (self.market.get(o["token"]) or {}).get("symbol") or str(o["token"])[:6]
+        try:
+            usd = float(o.get("usd"))
+        except (TypeError, ValueError):
+            usd = None
+        o["reason"] = f"{o.get('reason', '')} [refused: {text.split(': ', 1)[-1]}]"[:300]
+        rf = self.accounts[name].setdefault("recent_failures", [])
+        rf.append({"ts": now, "action": o["action"], "token": o["token"], "symbol": symbol, "usd": usd,
+                   "fraction": None, "reason": o["reason"], "exit": False, "text": text})
+        del rf[:-10]
+        print(f"[{name}] REFUSED BUY {symbol}: {text.split(': ', 1)[-1]}")
+        return None
 
     def _fail(self, name, o, t, now):
         """A transaction that didn't land: nothing is traded, the network fee is still paid, and the agent is told."""

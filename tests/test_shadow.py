@@ -47,6 +47,7 @@ def test_leader_set_empty_note(arena_with_stub_tracker):
 
 def test_leader_set_takes_top_n_fresh(arena_with_stub_tracker, monkeypatch):
     monkeypatch.setattr("arena.SHADOW_LEADERS", 3)
+    monkeypatch.setattr("arena.BUY_COOLDOWN_MIN", 0)  # this test buys twice at the same simulated instant
     top = [_leader(i, last_trade=_NOW - 60) for i in range(1, 6)] + [_leader(9, last_trade=_NOW - 9 * 3600)]
     a = arena_with_stub_tracker(top=top)
     assert [l["rank"] for l in a.shadow_leaders("Haiku Shadow", _NOW)] == [1, 2, 3]
@@ -80,6 +81,7 @@ def test_sell_when_copied_wallet_sells(arena_with_stub_tracker, monkeypatch):
 
 def test_buy_following_stores_copied_wallet(arena_with_stub_tracker, monkeypatch):
     monkeypatch.setattr("arena.SHADOW_LEADERS", 3)
+    monkeypatch.setattr("arena.BUY_COOLDOWN_MIN", 0)  # this test buys twice at the same simulated instant
     top = [_leader(i, last_trade=_NOW - 60) for i in range(1, 4)]
     a = arena_with_stub_tracker(top=top)
     a.clock = lambda: _NOW
@@ -90,7 +92,7 @@ def test_buy_following_stores_copied_wallet(arena_with_stub_tracker, monkeypatch
     for following, expect in ((f"{w2[:4]}…{w2[-4:]}", w2), ("nobody", None)):
         a.accounts["Haiku Shadow"]["positions"].clear()
         v = a.view("Haiku Shadow", _NOW)
-        o = a.validate(agent, {"action": "buy", "token": tok, "usd": 20, "reason": "copy", "following": following}, v)
+        o = a.validate(agent, {"action": "buy", "token": tok, "usd": 60, "reason": "copy", "following": following}, v)
         assert o is not None
         a.execute("Haiku Shadow", o, _NOW)
         assert a.accounts["Haiku Shadow"]["positions"][tok].get("copied_wallet") == expect
