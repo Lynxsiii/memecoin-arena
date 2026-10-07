@@ -66,3 +66,26 @@ def test_failures_trimmed_to_ten(arena_llm):
     for _ in range(12):
         a.validate(a.agents[name], _buy(10), view)
     assert len(a.accounts[name]["recent_failures"]) == 10
+
+
+def test_queued_buy_trips_cooldown_with_clear_text(arena_llm):
+    a, name, view = arena_llm()
+    a.pending.append((name, {"action": "buy", "token": "T1pump", "usd": 60}))
+    assert a.validate(a.agents[name], _buy(60), view) is None
+    assert "a buy is already queued (30 minute cooldown)" in _last(a, name)["text"]
+
+
+def test_env_names(monkeypatch):
+    import importlib
+
+    import arena
+    monkeypatch.setenv("ARENA_LLM_MIN_BUY_USD", "75")
+    monkeypatch.setenv("ARENA_LLM_MAX_BUYS_PER_DAY", "3")
+    monkeypatch.setenv("ARENA_LLM_BUY_COOLDOWN_MIN", "10")
+    try:
+        importlib.reload(arena)
+        assert (arena.MIN_BUY_USD, arena.MAX_BUYS_PER_DAY, arena.BUY_COOLDOWN_MIN) == (75.0, 3, 10.0)
+    finally:
+        monkeypatch.undo()
+        importlib.reload(arena)
+    assert (arena.MIN_BUY_USD, arena.MAX_BUYS_PER_DAY, arena.BUY_COOLDOWN_MIN) == (50.0, 6, 30.0)

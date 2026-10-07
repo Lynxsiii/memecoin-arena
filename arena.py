@@ -9,7 +9,7 @@ Settings (environment variables, read when the Arena is built):
   ARENA_FAST_EXIT_SECS=10   seconds between fast exit checks inside a tick (0 disables them). Each check costs
                             one DexScreener request per 30 held tokens in the live market and nothing in the mock.
   ARENA_SHADOW_LEADERS=10   how many top wallets a shadow trader follows (its leader set, re-picked every 6 hours).
-  ARENA_MAX_BUYS_PER_DAY=6, ARENA_MIN_BUY_USD=50, ARENA_BUY_COOLDOWN_MIN=30   churn control for Claudes (not bots): at most
+  ARENA_LLM_MAX_BUYS_PER_DAY=6, ARENA_LLM_MIN_BUY_USD=50, ARENA_LLM_BUY_COOLDOWN_MIN=30   churn control for Claudes (not bots): at most
                             this many buys in a rolling 24 hours, none smaller than the minimum, this many minutes between
                             buys (0 turns a rule off). A refused buy is listed in acct["recent_failures"] with the reason.
 Execution friction (failed transactions, MEV slippage, fees) is configured in exchange.py; Jupiter quotes in
@@ -78,9 +78,9 @@ LIQ_EXIT = 0.5          # sell everything when the pool's liquidity falls under 
 CREATOR_SELL_USD = float(os.environ.get("ARENA_CREATOR_SELL_USD", "100") or 100)
 # Churn control for Claudes (bots are exempt): every round trip costs about 5 % in fees and slippage, so a Claude may make at
 # most MAX_BUYS_PER_DAY buys in any rolling 24 hours, none under MIN_BUY_USD, and must wait BUY_COOLDOWN_MIN minutes between buys.
-MAX_BUYS_PER_DAY = max(0, int(os.environ.get("ARENA_MAX_BUYS_PER_DAY", "6") or 0))
-MIN_BUY_USD = max(0.0, float(os.environ.get("ARENA_MIN_BUY_USD", "50") or 0))
-BUY_COOLDOWN_MIN = max(0.0, float(os.environ.get("ARENA_BUY_COOLDOWN_MIN", "30") or 0))
+MAX_BUYS_PER_DAY = max(0, int(os.environ.get("ARENA_LLM_MAX_BUYS_PER_DAY", "6") or 0))
+MIN_BUY_USD = max(0.0, float(os.environ.get("ARENA_LLM_MIN_BUY_USD", "50") or 0))
+BUY_COOLDOWN_MIN = max(0.0, float(os.environ.get("ARENA_LLM_BUY_COOLDOWN_MIN", "30") or 0))
 SHADOW_LEADERS = int(os.environ.get("ARENA_SHADOW_LEADERS", "10") or 10)  # wallets in a shadow trader's leader set
 
 
@@ -828,10 +828,10 @@ class Arena:
                                            (name, now - 86400)).fetchone()
         queued = sum(1 for n2, x in self.pending if n2 == name and x.get("action") == "buy")
         n += queued
-        if queued:
-            last = now
         if MAX_BUYS_PER_DAY and n >= MAX_BUYS_PER_DAY:
             return f"{what}: {n} buys in the last 24 hours (limit {MAX_BUYS_PER_DAY})"
+        if BUY_COOLDOWN_MIN and queued:
+            return f"{what}: a buy is already queued ({BUY_COOLDOWN_MIN:g} minute cooldown)"
         if BUY_COOLDOWN_MIN and last is not None and now - last < BUY_COOLDOWN_MIN * 60:
             return f"{what}: {(now - last) / 60:.0f} minutes since your last buy ({BUY_COOLDOWN_MIN:g} minute cooldown)"
         return None
