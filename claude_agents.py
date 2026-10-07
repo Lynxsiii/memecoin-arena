@@ -222,9 +222,10 @@ PERSONAS = {
     "degen": ("Degen", "Your style: degen. You hunt fresh launches and fast movers, size up to the full limit when you like a "
                        "setup, and take profits quickly. You accept that many trades lose; you're looking for the few big "
                        "runners. You still skip obvious rugs, like tokens whose mint authority is NOT revoked."),
-    "skeptic": ("Skeptic", "Your style: skeptic. You assume every token is a rug until the data proves otherwise. You only buy "
-                           "green-rated tokens with deep liquidity and healthy buy/sell flow and size small. You hold cash when "
-                           "nothing passes your checks, but you do buy the tokens that pass them."),
+    "skeptic": ("Skeptic", "Your style: skeptic. You trade graduates only, never the bonding curve. You assume every coin is a rug until its "
+                           "holders, LP lock and flow prove otherwise: no concentrated holders, liquidity that is deep and "
+                           "holding, net buying that is real. You size small. You hold cash when nothing passes your checks, "
+                           "but you do buy the coins that pass them."),
     "scalper": ("Scalper", "Your style: scalper. You trade short-term 5-minute momentum, look again often (every 2 to 5 "
                            "minutes), take 10-20% profits quickly and cut losers fast at around -8%."),
     # The twin adds NO style text: same model, same brief as the plain model agent. Any gap between the two
@@ -236,27 +237,26 @@ PERSONAS = {
                            "wallets buying the same token, higher-ranked wallets, sizes that show conviction, and tokens "
                            "whose holders and liquidity pass your checks. Act quickly on the good ones, skip the rest, and "
                            "sell when the wallets you followed sell."),
-    "graduate": ("Graduate", "Your style: graduate swing trader. You trade pump.fun coins after they graduate to PumpSwap, in "
-                             "the window where the research says an edge could exist: you let the first chaotic minutes "
-                             "after migration pass (snipers and insiders usually unwind within the first 5-20 minutes), then "
-                             "look for graduates whose liquidity is holding, whose net buying is real (not churn) and still "
-                             "coming in, whose holders aren't concentrated and whose creator isn't selling. You hold for hours, "
-                             "not minutes, let the exit ladder take profits, and skip everything else."),
-    "runner": ("Runner", "Your style: runner hunter. Memecoin profits come from the few coins that run many times over, so you "
-                         "go after them early with bets you size to your conviction, accepting that most lose. You favor real "
-                         "demand (net money from many distinct wallets, little churn), clean holder structure and a move "
-                         "that is building rather than a single spike, and you never chase a coin that already ran. Use "
-                         "your moonshot slots, let winners run with the ladder, and cut losers quickly."),
+    "graduate": ("Graduate", "Your style: graduate swing trader. You trade the graduates lane, coins that just migrated from pump.fun to "
+                             "PumpSwap. You let the first chaotic minutes after migration pass (snipers and insiders usually "
+                             "unwind within the first 5-20 minutes of minutes_since_graduation), then look for graduates whose "
+                             "liquidity is holding, whose net buying is real (not churn) and still coming in, whose holders "
+                             "aren't concentrated and whose creator isn't selling. You hold for hours, not minutes, let the exit "
+                             "ladder take profits, and skip everything else."),
+    "runner": ("Runner", "Your style: runner hunter. Memecoin profits come from the few coins that run many times over, so you hunt "
+                         "the curve lane: bonding-curve coins whose curve_pct is accelerating (see curve_pct_chg_10m) on net "
+                         "money from many distinct wallets, with little churn and a clean holder structure. You size each bet "
+                         "to your conviction and accept that most lose. You never buy past 80% of the curve and never chase a "
+                         "coin that already ran. Use your moonshot slots, let winners run with the ladder, and cut losers quickly."),
     "shadow": ("Shadow", "Your style: shadow trader. your_leaders lists the top wallets the arena picked for you: "
                          "profitable over the last two days, many different tokens, not bots or sub-minute flippers, "
-                         "active in the last 6 hours. You follow their trades with your own judgment: when one of them "
-                         "buys a coin that passes your checks you may buy too, sized as you see fit, and name it with "
-                         "\"following\": \"<its wallet as shown>\" so the arena sells when that wallet sells. Skip buys you "
-                         "don't trust: tiny probe buys, tokens with concentrated holders, coins that already ran far above "
-                         "its entry. Several leaders buying the same coin is a stronger signal than one. Each leader in "
-                         "your_leaders shows its record, its trades of the last 30 minutes (buys the research says not to "
-                         "copy carry skip_reasons) and what it still seems to hold. You set your own exits and take your "
-                         "own profits; a position bought without \"following\" is not sold when a leader sells."),
+                         "active in the last 6 hours. Each leader shows its record_48h, its latest_trades (buys the research "
+                         "says not to copy carry skip_reasons) and what it seems_to_hold. When one of them buys a coin that "
+                         "passes your checks you may buy too, sized as you see fit, and name it with "
+                         "\"following\": \"<its wallet as shown>\" so the arena sells when that wallet sells. Several leaders "
+                         "buying the same coin is a stronger signal than one. Skip probe buys, tokens with concentrated holders "
+                         "and coins already far above the leader's entry. You set your own exits and take your own profits; a "
+                         "position bought without \"following\" is not sold when a leader sells."),
 }
 
 # Display-only personalities, keyed by avatar. Shown on the dashboard and used by the announcer; NEVER sent to Claude.
@@ -690,6 +690,8 @@ class ClaudeCodeBackend:
         r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
                            timeout=600, env=env, cwd=tempfile.gettempdir(),
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        # stderr may carry noise such as `[claude-code:unrecognized_model] {"model":"claude-haiku-5-5",...}` for a new
+        # model id; it is harmless (the call still completes), so only the `result` line on stdout is parsed.
         out, limits = None, {}
         for line in r.stdout.splitlines():
             try:
@@ -855,8 +857,10 @@ class CouncilAgent(LLMAgent):
 # Shadow, which follows one vetted top wallet. Degen and Scalper were retired after run 2.
 # Run 7 (2026-10-07): every Sonnet has its own strategy (the user's choice; Twin and Triplet, the identical luck
 # controls, became Graduate and Runner).
-DEFAULT_LINEUP = ("claude-sonnet-5-5,claude-sonnet-5-5:graduate,claude-sonnet-5-5:skeptic,claude-sonnet-5-5:runner,"
-                  "claude-sonnet-5-5:shadow")
+# Run 8 (2026-10-07): pump.fun only, Haiku 5.5 x4 (Graduate, Runner, Skeptic, Shadow) plus Sonnet 5.5 x2 (Graduate,
+# Shadow) to see whether the cheaper model matches the dearer one on the same strategies.
+DEFAULT_LINEUP = ("claude-haiku-5-5:graduate,claude-haiku-5-5:runner,claude-haiku-5-5:skeptic,claude-haiku-5-5:shadow,"
+                  "claude-sonnet-5-5:graduate,claude-sonnet-5-5:shadow")
 
 
 def build_llm_agents():
