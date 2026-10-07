@@ -47,15 +47,16 @@ Discovery (where tracked tokens come from; every token carries `source` and `fir
     recently priced first) are priced on DexScreener each discover cycle (4 requests of 30), and one is tracked
     as soon as its market cap reaches ARENA_PUMPFUN_TRACK_MCAP_USD or its 1h volume ARENA_PUMPFUN_TRACK_VOL_USD
     with at least 40 1h transactions; the rest are forgotten. Every curve token carries pump.curve_pct
-    (market cap / the $69,000 graduation cap, 0-100) and every priced token `high` (highest price seen).
+    (market cap / the $69,000 graduation cap, 0-100; 100 once graduated) and every priced token `high` (highest
+    price seen).
   - "copy": force-tracked with LiveMarket.track() (a trader the arena follows just bought it).
   Every token also carries `sources`, the list of every tag it ever matched, in order; `source` is the first one
   (except promoted + organic -> "both", and pumpfun -> graduated).
   When the pool is full (max_tracked), eviction keeps about ARENA_PUMPFUN_SHARE of the slots for pump.fun tokens
-  and splits the rest between organic and promoted by ARENA_ORGANIC_SHARE, dropping first dead tokens (a launch
-  trading at 10% or less of its high, or any token DexScreener has not priced for 10 minutes), then the oldest
-  free token of whichever group is furthest over its share (among pump.fun tokens, launches before graduations).
-  Held tokens and tokens protected by track() are never evicted.
+  and splits the rest between organic and promoted by ARENA_ORGANIC_SHARE, dropping first dead tokens (any token
+  DexScreener has not priced for 10 minutes and, with ARENA_UNIVERSE=pumpfun, a launch trading at 10% or less of
+  its high), then the oldest free token of whichever group is furthest over its share (among pump.fun tokens,
+  launches before graduations). Held tokens and tokens protected by track() are never evicted.
   ARENA_DISCOVERY=both          dexscreener | geckoterminal | both: which discovery feeds to use.
   ARENA_ORGANIC_SHARE=0.5       share of the non-pump.fun slots kept for organic tokens (0 = promoted only,
                                 1 = organic only).
@@ -261,7 +262,10 @@ def _annotate(t):
     price = t.get("price") or 0
     if price > 0:
         t["high"] = max(t.get("high") or 0, price)  # highest price seen while tracked (dead-launch eviction)
-    if t.get("dex") == "pumpfun" or t.get("source") == "pumpfun":
+    pump = t.get("pump")
+    if isinstance(pump, dict) and pump.get("graduated"):
+        pump["curve_pct"] = 100.0  # the curve completed: never a stale value from the curve days
+    elif t.get("dex") == "pumpfun" or t.get("source") == "pumpfun":
         curve_pct = min(100.0, (t.get("mcap") or 0) / GRADUATION_CAP_USD * 100)  # progress toward graduation
         t.setdefault("pump", {})["curve_pct"] = round(curve_pct, 1)
     t["flags"] = risk_flags(t)
@@ -619,9 +623,9 @@ class LiveMarket:
         return {"pumpfun": pump, "organic": organic, "promoted": rest - organic}
 
     def _evict(self, held, now=None):
-        """Shrink the pool to max_tracked. Dead tokens go first, oldest first: pump.fun launches trading at 10% or
-        less of their tracked high, and tokens DexScreener has not priced for 10 minutes (dead curves, unlisted
-        mints). Then slots are shared between the groups by quota() ("both" tokens count for organic and
+        """Shrink the pool to max_tracked. Dead tokens go first, oldest first: tokens DexScreener has not priced for
+        10 minutes (dead curves, unlisted mints) and, in the pumpfun universe only, launches trading at 10% or less
+        of their tracked high. Then slots are shared between the groups by quota() ("both" tokens count for organic and
         promoted and go last): the oldest free token of whichever group is furthest over its share goes, launches
         before graduations in the pump.fun group. Held tokens and tokens protected by track() are never evicted."""
         excess = len(self.tokens) - self.max_tracked
@@ -640,7 +644,8 @@ class LiveMarket:
                 if a in held or (t.get("protect_until") or 0) > now:
                     continue
                 free[g].append(a)
-                if t.get("source") == "pumpfun" and 0 < (t.get("price") or 0) <= 0.1 * (t.get("high") or 0):
+                if UNIVERSE == "pumpfun" and t.get("source") == "pumpfun" \
+                        and 0 < (t.get("price") or 0) <= 0.1 * (t.get("high") or 0):
                     dead.append(a)  # a launch down 90%+ from its high: the curve is dead
                 elif not t.get("price") and now - (t.get("first_seen") or now) > 600:
                     dead.append(a)

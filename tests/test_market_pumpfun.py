@@ -118,6 +118,10 @@ def test_curve_pct_annotated():
     _annotate(t)
     assert t["pump"]["curve_pct"] == 50.0
     assert t["high"] == 1e-6
+    g = {"price": 2e-6, "mcap": 30000, "source": "graduated", "dex": "pumpswap",
+         "pump": {"launched": 1, "graduated": 2, "curve_pct": 43.5}}
+    _annotate(g)
+    assert g["pump"]["curve_pct"] == 100.0  # graduates never keep a stale curve value
 
 
 def test_track_refuses_non_pump_mint_in_pumpfun_mode(monkeypatch):
@@ -144,6 +148,20 @@ def test_evict_dead_launch_beats_older_live_launch(monkeypatch):
                 "Y3pump": {"address": "Y3pump", "price": 5, "high": 5, "source": "graduated", "first_seen": 3}}
     m._evict(held=set(), now=_NOW)
     assert set(m.tokens) == {"Y1pump", "Y3pump"}  # the dead launch goes although an older launch exists
+
+
+def test_all_mode_keeps_crashed_launch_under_quota(monkeypatch):
+    m = _market(monkeypatch, universe="all")
+    monkeypatch.setattr(market, "PUMPFUN_SHARE", 0.5)
+    m.max_tracked = 4  # quota: pumpfun 2, organic 1, promoted 1
+    m.tokens = {"P1": {"address": "P1", "price": 1, "high": 1, "source": "promoted", "first_seen": 1},
+                "Z1pump": {"address": "Z1pump", "price": 1, "high": 100, "source": "pumpfun", "first_seen": 2},
+                "P2": {"address": "P2", "price": 1, "high": 1, "source": "promoted", "first_seen": 3},
+                "O1": {"address": "O1", "price": 1, "high": 1, "source": "organic", "first_seen": 4},
+                "P3": {"address": "P3", "price": 1, "high": 1, "source": "promoted", "first_seen": 5}}
+    m._evict(held=set(), now=_NOW)
+    assert "Z1pump" in m.tokens  # old behaviour: pump.fun is under quota, so the crashed launch stays
+    assert "P1" not in m.tokens  # the oldest token of the group furthest over its share goes instead
 
 
 def test_all_mode_keeps_top_creator_buys(monkeypatch):
