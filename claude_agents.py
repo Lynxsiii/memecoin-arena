@@ -75,7 +75,8 @@ Playbook (what the data means; you decide what to do with it):
 - Your earlier decisions (your_previous_note, recent_closed, your_journal) are context to learn from, not rules to obey.
 
 Order formats:
-  {"action": "buy",  "token": "<address>", "usd": <dollars>, "reason": "<short reason>", ...optional exit fields, "moonshot": true (optional)}
+  {"action": "buy",  "token": "<address>", "usd": <dollars>, "reason": "<short reason>", ...optional exit fields, "moonshot": true (optional),
+                    "following": "<leader wallet as shown in your_leaders>" (optional, shadow traders only)}
   {"action": "sell", "token": "<address>", "fraction": <0 to 1>, "reason": "<short reason>"}
   {"action": "exits", "token": "<address>", ...exit fields}   (set or change exits on a position, no trade)
 
@@ -246,14 +247,16 @@ PERSONAS = {
                          "demand (net money from many distinct wallets, little churn), clean holder structure and a move "
                          "that is building rather than a single spike, and you never chase a coin that already ran. Use "
                          "your moonshot slots, let winners run with the ladder, and cut losers quickly."),
-    "shadow": ("Shadow", "Your style: shadow trader. your_leader is ONE top wallet the arena picked for you: profitable over "
-                         "the last two days, many different tokens, not a bot or a sub-minute flipper. You follow its "
-                         "trades with your own judgment: when it buys a token that passes your checks you may buy too, "
-                         "sized as you see fit; you set your own exits and take your own profits; treat its sell as a "
-                         "strong reason to sell. Skip buys you don't trust: tiny probe buys, tokens with concentrated "
-                         "holders, coins that already ran far above its entry. your_leader shows its record, its latest "
-                         "trades (buys the research says not to copy carry skip_reasons) and what it still seems to hold. "
-                         "When your leader sells a coin you hold, the arena sells yours too."),
+    "shadow": ("Shadow", "Your style: shadow trader. your_leaders lists the top wallets the arena picked for you: "
+                         "profitable over the last two days, many different tokens, not bots or sub-minute flippers, "
+                         "active in the last 6 hours. You follow their trades with your own judgment: when one of them "
+                         "buys a coin that passes your checks you may buy too, sized as you see fit, and name it with "
+                         "\"following\": \"<its wallet as shown>\" so the arena sells when that wallet sells. Skip buys you "
+                         "don't trust: tiny probe buys, tokens with concentrated holders, coins that already ran far above "
+                         "its entry. Several leaders buying the same coin is a stronger signal than one. Each leader in "
+                         "your_leaders shows its record, its trades of the last 30 minutes (buys the research says not to "
+                         "copy carry skip_reasons) and what it still seems to hold. You set your own exits and take your "
+                         "own profits; a position bought without \"following\" is not sold when a leader sells."),
 }
 
 # Display-only personalities, keyed by avatar. Shown on the dashboard and used by the announcer; NEVER sent to Claude.
@@ -602,7 +605,7 @@ class LLMAgent(Agent):
             "scoreboard": v.get("scoreboard", []),
             **({"your_score": v["your_score"]} if v.get("your_score") else {}),
             **({"strategy_room": v["strategy_room"]} if v.get("strategy_room") is not None else {}),
-            **({"your_leader": v["your_leader"]} if v.get("your_leader") else {}),
+            **({"your_leaders": v["your_leaders"]} if v.get("your_leaders") else {}),
             "your_watch": self.watch,
             "your_journal": {str(i): s for i, s in enumerate(self.get_journal(), 1)},
             "recent_failures": [f["text"] for f in v.get("recent_failures", []) if isinstance(f, dict) and f.get("text")],

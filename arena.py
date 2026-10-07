@@ -8,6 +8,7 @@ agents' own orders still fill on the next full tick, as documented.
 Settings (environment variables, read when the Arena is built):
   ARENA_FAST_EXIT_SECS=10   seconds between fast exit checks inside a tick (0 disables them). Each check costs
                             one DexScreener request per 30 held tokens in the live market and nothing in the mock.
+  ARENA_SHADOW_LEADERS=10   how many top wallets a shadow trader follows (its leader set, re-picked every 6 hours).
 Execution friction (failed transactions, MEV slippage, fees) is configured in exchange.py; Jupiter quotes in
 market.py. A failed transaction trades nothing, costs the network fee, is counted in acct["failed"] and
 listed in acct["recent_failures"], which view() passes to agents as "recent_failures".
@@ -72,6 +73,7 @@ LADDER_TRAIL = [(10.0, 15.0), (5.0, 20.0), (2.0, 30.0)]          # (peak multipl
 TIME_STOP_H = float(os.environ.get("ARENA_TIME_STOP_H", "6") or 6)
 LIQ_EXIT = 0.5          # sell everything when the pool's liquidity falls under half of what it was at entry
 CREATOR_SELL_USD = float(os.environ.get("ARENA_CREATOR_SELL_USD", "100") or 100)
+SHADOW_LEADERS = int(os.environ.get("ARENA_SHADOW_LEADERS", "10") or 10)  # wallets in a shadow trader's leader set
 
 
 def ladder_text():
@@ -318,7 +320,7 @@ class Arena:
                 "recent_closed": self.db.recent_sells(name), "scoreboard": board,
                 "your_score": self.your_score(name, board, now),
                 "structure": self.structure,
-                **({"your_leader": self.leader_view(name, now)} if getattr(self.agents[name], "persona", None) == "shadow" else {}),
+                **({"your_leaders": self.leader_view(name, now)} if getattr(self.agents[name], "persona", None) == "shadow" else {}),
                 "strategy_room": self.room_view(name, now),
                 "market_memory": self.memory.stats(now, self.round_trip(now)) if self.memory else None,
                 "measured_round_trip_cost_pct": self.round_trip(now),
@@ -520,29 +522,48 @@ class Arena:
             print(f"[arena] leader trades failed: {e}")
         return sorted(out, key=lambda x: -x["ts"])
 
-    def shadow_leader(self, name, now):
-        """The one wallet a shadow trader follows. Picked from the tracker's top-100 by the copy-trading research's checks
-        (profitable, 3+ tokens, not a flipper or a hyperactive bot, traded in the last 6 hours, selective), kept for 6
-        hours, and replaced early if it drops off the board or goes quiet. Persisted, so restarts keep the same leader."""
+    def shadow_leaders(self, name, now):
+        """The wallets a shadow trader follows: the top SHADOW_LEADERS of the tracker's board (by rank) that pass the
+        copy-trading research's checks (profitable, 3+ tokens, not a flipper or a hyperactive bot) and traded in the
+        last 6 hours. Persisted, so restarts keep the same set; re-picked after 6 hours, or earlier when fewer than half
+        of the saved wallets are still on the board."""
         if not self.tracker:
-            return None
-        key = "__leader__:" + name
-        cur = self.db.load_state(key)
+            return []
+        key = "__leaders__:" + name
+        cur = self.db.load_state(key) or {}
         top = {t["wallet"]: t for t in self.tracker.top()}
+        saved = cur.get("wallets") or []
+        kept = [top[w] for w in saved if w in top]
+        if kept and now - cur.get("picked", 0) < 6 * 3600 and 2 * len(kept) >= len(saved):
+            return [{**t, "picked": cur["picked"]} for t in kept]
         fresh = lambda t: now - (t.get("last_trade_ts") or 0) < 6 * 3600
-        if cur and cur.get("wallet") in top and now - cur.get("picked", 0) < 6 * 3600 and fresh(top[cur["wallet"]]):
-            return {**top[cur["wallet"]], "picked": cur["picked"]}
         good = [t for t in top.values() if (t.get("pnl_usd") or 0) > 0 and (t.get("tokens") or 0) >= 3
                 and (t.get("flips") or 0) <= 1 and 6 <= (t.get("trades") or 0) <= 150 and fresh(t)]
         pool = good or [t for t in top.values() if fresh(t)]
         if not pool:
-            return {**top[cur["wallet"]], "picked": cur["picked"]} if cur and cur.get("wallet") in top else None
-        # selective and profitable: profit per token traded, then raw profit
-        pick = max(pool, key=lambda t: ((t.get("pnl_usd") or 0) / max(1, t.get("tokens") or 1), t.get("pnl_usd") or 0))
-        if not cur or cur.get("wallet") != pick["wallet"]:
-            print(f"[arena] {name} now shadows #{pick.get('rank')} {pick['wallet'][:6]}… (${pick.get('pnl_usd', 0):,.0f})")
-        self.db.save_state(key, {"wallet": pick["wallet"], "picked": now})
-        return {**pick, "picked": now}
+            return [{**t, "picked": cur.get("picked", now)} for t in kept]
+        pick = sorted(pool, key=lambda t: t.get("rank") or float("inf"))[:SHADOW_LEADERS]
+        wallets = [t["wallet"] for t in pick]
+        if wallets != saved:
+            print(f"[arena] {name} now shadows {len(pick)} wallets: " +
+                  ", ".join(f"#{t.get('rank')} {t['wallet'][:6]}…" for t in pick))
+        self.db.save_state(key, {"wallets": wallets, "picked": now})
+        return [{**t, "picked": now} for t in pick]
+
+    @staticmethod
+    def _short_wallet(w):
+        return f"{w[:4]}…{w[-4:]}"
+
+    def _match_leader(self, name, following, now):
+        """The full wallet of the leader a shadow buy names in "following" (as shown, abbreviated, or the full address), or None."""
+        f = str(following or "").strip().replace("...", "…")
+        if not f:
+            return None
+        for lead in self.shadow_leaders(name, now):
+            w = lead["wallet"]
+            if f in (w, self._short_wallet(w)):
+                return w
+        return None
 
     def _shadow_skip(self, t, trades, now):
         """Why a shadow trader should probably NOT copy one of its leader's buys (the research's admission rules):
@@ -567,12 +588,8 @@ class Arena:
             out.append("vetoed: " + "; ".join(veto[:2]))
         return out
 
-    def leader_view(self, name, now):
-        """What a shadow trader sees about its leader: record, latest trades, what it still seems to hold."""
-        lead = self.shadow_leader(name, now)
-        if not lead:
-            return {"note": "No leader yet: the top-trader board is still empty. Trade on your own judgment until one appears."}
-        w = lead["wallet"]
+    def _leader_entry(self, w, lead, now):
+        """One leader as a shadow trader sees it: record, trades of the last 30 minutes, what it still seems to hold."""
         trades = self._leader_trades(w, now - 86400)
         last = {}
         for t in reversed(trades):  # oldest first, so the newest action per token wins
@@ -581,15 +598,24 @@ class Arena:
             h["last"], h["last_ts"] = t["side"], t["ts"]
         holding = [{"token": h["token"], "symbol": h["symbol"], "bought_usd": round(h["bought_usd"]),
                     "sold_usd": round(h["sold_usd"]), "last_buy_min_ago": round((now - h["last_ts"]) / 60)}
-                   for h in sorted(last.values(), key=lambda h: -h["last_ts"]) if h["last"] == "buy"][:10]
-        return {"wallet": f"{w[:4]}…{w[-4:]}", "rank": lead.get("rank"), "picked_min_ago": round((now - lead["picked"]) / 60),
+                   for h in sorted(last.values(), key=lambda h: -h["last_ts"]) if h["last"] == "buy"][:5]
+        return {"wallet": self._short_wallet(w), "rank": lead.get("rank"),
                 "record_48h": {k: lead.get(k) for k in ("pnl_usd", "roi_pct", "win_rate", "trades", "tokens", "volume_usd")},
                 "latest_trades": [{"min_ago": round((now - t["ts"]) / 60, 1), "side": t["side"], "symbol": t["symbol"],
                                    "token": t["token"], "usd": round(t["usd"]), "seen_via": t["source"],
                                    **({"skip_reasons": why} if (why := self._shadow_skip(t, trades, now)) else {})}
-                                  for t in trades[:15]],
-                "seems_to_hold": holding,
-                "note": "Trades seen via the pool feed arrive minutes late; 'helius' ones within seconds."}
+                                  for t in trades if now - t["ts"] <= 1800][:15],
+                "seems_to_hold": holding}
+
+    def leader_view(self, name, now):
+        """What a shadow trader sees about its leader set: one entry per leader (see _leader_entry)."""
+        leaders = self.shadow_leaders(name, now)
+        if not leaders:
+            return {"note": "No leaders yet: the top-trader board is still empty. Trade on your own judgment until some appear."}
+        return {"leaders": [self._leader_entry(l["wallet"], l, now) for l in leaders],
+                "note": "Trades seen via the pool feed arrive minutes late; 'helius' ones within seconds. "
+                        "Name the wallet you copy in your buy (\"following\": \"<wallet as shown>\") and the arena sells "
+                        "when that wallet sells."}
 
     # ---------- screens: what each Claude is looking at ----------
     def screens(self, now):
@@ -633,12 +659,13 @@ class Arena:
                 add(a, "holding", "holding")
             leader = None
             if getattr(agent, "persona", None) == "shadow":
-                lead = self.shadow_leader(name, now)
-                if lead:
-                    leader = {"wallet": f"{lead['wallet'][:4]}…{lead['wallet'][-4:]}", "rank": lead.get("rank")}
-                    buys = [t for t in self._leader_trades(lead["wallet"], now - 3600) if t["side"] == "buy"]
+                leads = self.shadow_leaders(name, now)
+                if leads:  # the dashboard shows the top-ranked one; "count" is the size of the set
+                    leader = {"wallet": self._short_wallet(leads[0]["wallet"]), "rank": leads[0].get("rank"), "count": len(leads)}
+                    buys = sorted((t for l in leads for t in self._leader_trades(l["wallet"], now - 3600) if t["side"] == "buy"),
+                                  key=lambda t: -t["ts"])
                     if buys:
-                        add(buys[0]["token"], "leader", f"its leader bought it {ago_text(now - buys[0]['ts'])}")
+                        add(buys[0]["token"], "leader", f"a leader bought it {ago_text(now - buys[0]['ts'])}")
             screens = []
             for a in focus:
                 pos = acct["positions"].get(a)
@@ -757,6 +784,13 @@ class Arena:
             if o["token"] not in held and len(held) >= agent.max_positions:
                 return None
             o["usd"] = usd
+            # a shadow buy may name the leader it copies; keep the full wallet, drop anything that matches no leader
+            wallet = self._match_leader(agent.name, o.get("following"), view["now"]) \
+                if o.get("following") and getattr(agent, "persona", None) == "shadow" else None
+            if wallet:
+                o["following"] = wallet
+            else:
+                o.pop("following", None)
         else:
             if o["token"] not in held:
                 return None
@@ -824,6 +858,8 @@ class Arena:
             pos = acct["positions"].setdefault(addr, {"symbol": t["symbol"], "qty": 0.0, "cost": 0.0, "opened": now})
             if o.get("moonshot") and pos["qty"] == 0:
                 pos["moonshot"] = True
+            if o.get("following"):
+                pos["copied_wallet"] = o["following"]  # the shadow's leader-sell exit watches this wallet
             pos["cost_in"] = pos.get("cost_in", pos["cost"]) + usd  # everything ever put in (for the runner bonus)
             pos.setdefault("liq_entry", t.get("liquidity") or 0)
             pos.setdefault("peak_ts", now)
@@ -917,15 +953,16 @@ class Arena:
 
     def check_managed(self, now):
         """The exit ladder, trailing stop, time stop and event exits on every Claude position (see LADDER). Sells are
-        queued as exits and fill on the next tick or fast check. Also the shadow trader's exit when its leader sells."""
+        queued as exits and fill on the next tick or fast check. Also the shadow trader's exit when the leader it copied
+        into a position (copied_wallet) sells that token."""
         if not MANAGED_EXITS:
             return
         creator_sold = getattr(self, "creator_sold", {})  # mint -> usd the creator sold lately (signals.py)
+        leader_sells = {}  # wallet -> {token: its newest sell}, read once per wallet in this check
         for name, agent in self.agents.items():
             if agent.kind != "llm":
                 continue
             acct = self.accounts[name]
-            leader_sells = None
             for token, pos in list(acct["positions"].items()):
                 if self._queued(name, token):
                     continue
@@ -943,14 +980,16 @@ class Arena:
                     sell, why = 1.0, f"liquidity pulled: the pool is down {(1 - liq / liq0) * 100:.0f}% since you bought"
                 elif creator_sold.get(token, 0) >= CREATOR_SELL_USD and creator_sold.get(token, 0) > 0:
                     sell, why = 1.0, f"creator sold: ${creator_sold[token]:,.0f} dumped by the token's creator"
-                elif getattr(agent, "persona", None) == "shadow":
-                    if leader_sells is None:
-                        lead = self.shadow_leader(name, now)
-                        leader_sells = {x["token"]: x for x in self._leader_trades(lead["wallet"], now - 86400)
-                                        if x["side"] == "sell"} if lead else {}
-                    s = leader_sells.get(token)
+                elif getattr(agent, "persona", None) == "shadow" and pos.get("copied_wallet"):
+                    w = pos["copied_wallet"]
+                    if w not in leader_sells:
+                        leader_sells[w] = {}
+                        for x in self._leader_trades(w, now - 86400):  # newest first: keep each token's newest sell
+                            if x["side"] == "sell":
+                                leader_sells[w].setdefault(x["token"], x)
+                    s = leader_sells[w].get(token)
                     if s and s["ts"] > pos.get("opened", 0):
-                        sell, why = 1.0, f"leader sold: your leader sold this {ago_text(now - s['ts'])}"
+                        sell, why = 1.0, f"leader sold: {self._short_wallet(w)}, the wallet you copied, sold this {ago_text(now - s['ts'])}"
                 if sell is None:
                     trail = next((tr for m, tr in LADDER_TRAIL if peak_mult >= m), None)
                     if trail is not None and spot <= pos["peak_price"] * (1 - trail / 100):
