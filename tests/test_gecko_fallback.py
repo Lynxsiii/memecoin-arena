@@ -91,8 +91,9 @@ def _market(monkeypatch, tokens=None, pools=None, dex_pairs=None, gecko_raises=F
 
 def _two_mint_feed():
     tokens = {MINT_A: _gecko_token(MINT_A, POOL_A, "AAA"), MINT_B: _gecko_token(MINT_B, POOL_B, "BBB")}
-    pools = {POOL_A: _gecko_pool(POOL_A, MINT_A, SOL_MINT, "pump-swap", name="AAA / SOL"),
-             POOL_B: _gecko_pool(POOL_B, MINT_B, SOL_MINT, "pumpfun", reserve="0", mcap="20000",
+    # real GeckoTerminal dex ids (/networks/solana/dexes): "pumpswap" = the AMM, "pump-fun" = the bonding curve
+    pools = {POOL_A: _gecko_pool(POOL_A, MINT_A, SOL_MINT, "pumpswap", name="AAA / SOL"),
+             POOL_B: _gecko_pool(POOL_B, MINT_B, SOL_MINT, "pump-fun", reserve="0", mcap="20000",
                                  name="BBB / SOL")}
     return tokens, pools
 
@@ -118,6 +119,7 @@ def test_fallback_prices_when_dexscreener_empty(monkeypatch):
     assert best[MINT_A]["liquidity"] == pytest.approx(12345.6)
     assert best[MINT_A]["pair"] == POOL_A
     assert best[MINT_A]["url"] == f"https://www.geckoterminal.com/solana/pools/{POOL_A}"
+    # a "pump-fun" pool must come out as dex "pumpfun" (graduation detection, signals.PUMP_DEXES, pool_fee)
     assert best[MINT_B]["dex"] == "pumpfun"
     assert best[MINT_B]["mcap"] == 20000
     assert best[MINT_B]["liquidity"] == pytest.approx(market.curve_liquidity_usd(20000, 150.0))
@@ -152,7 +154,7 @@ def test_fallback_call_cap(monkeypatch):
     assert len(set(mints)) == 400
     pool = {a: "Pool" + a[:6] + "1" * 34 for a in mints}
     tokens = {a: _gecko_token(a, pool[a]) for a in mints}
-    pools = {pool[a]: _gecko_pool(pool[a], a, SOL_MINT, "pump-swap") for a in mints}
+    pools = {pool[a]: _gecko_pool(pool[a], a, SOL_MINT, "pumpswap") for a in mints}
     m, calls = _market(monkeypatch, tokens, pools)
     best = m._fetch_pairs(mints)
     assert 0 < len(calls) <= market.GECKO_FALLBACK_MAX_CALLS
@@ -189,3 +191,74 @@ def test_fallback_never_raises(monkeypatch):
     assert set(best) == {MINT_A}
     assert "price_source" not in best[MINT_A]
     assert m.gecko_stats["errors"] == errors + 1
+
+
+def test_gecko_dex_ids_map_to_dexscreener_spelling():
+    for gecko_id, dex in (("pump-fun", "pumpfun"), ("pumpswap", "pumpswap"), ("pump-swap", "pumpswap"),
+                          ("raydium", "raydium")):
+        t = market.parse_gecko_pool(_gecko_pool(POOL_A, MINT_A, SOL_MINT, gecko_id), {"address": MINT_A})
+        assert t["dex"] == dex
+
+
+def test_fresh_gecko_price_reused_within_20s(monkeypatch):
+    tokens, pools = _two_mint_feed()
+    m, calls = _market(monkeypatch, tokens, pools)
+    now = market.time.time()
+    for a, t in m._fetch_pairs([MINT_A, MINT_B]).items():
+        m._merge_pair(a, t, now)
+    assert calls
+    calls.clear()
+    best = m._fetch_pairs([MINT_A, MINT_B])  # e.g. the fast exit check 10 s later
+    assert calls == []
+    assert set(best) == {MINT_A, MINT_B}
+    assert all(t["price_source"] == "gecko" and t["price"] > 0 for t in best.values())
+    assert m.gecko_fallback_stats["reused"] == 2
+    for a in (MINT_A, MINT_B):  # older than 20 s: fetched again
+        m.tokens[a]["updated"] = now - 25
+    m._fetch_pairs([MINT_A, MINT_B])
+    assert calls and all(p.startswith("/networks/solana/pools/multi/") for p in calls)
+
+
+def test_fallback_minute_budget(monkeypatch):
+    monkeypatch.setattr(market, "GECKO_FALLBACK_PER_MIN", 3)
+    mints = [_mint(i) for i in range(100)]
+    pool = {a: "Pool" + a[:6] + "1" * 34 for a in mints}
+    tokens = {a: _gecko_token(a, pool[a]) for a in mints}
+    pools = {pool[a]: _gecko_pool(pool[a], a, SOL_MINT, "pumpswap") for a in mints}
+    m, calls = _market(monkeypatch, tokens, pools)
+    first = m._fetch_pairs(mints)
+    assert len(calls) == 3
+    assert first  # the last request the minute allows is a pools request, so something gets priced
+    skipped = m.gecko_fallback_stats["skipped"]
+    calls.clear()
+    assert m._fetch_pairs(mints) == {}  # same minute: budget spent, no request at all
+    assert calls == []
+    assert m.gecko_fallback_stats["skipped"] > skipped
+
+
+def test_fallback_prices_sol_and_held_first(monkeypatch):
+    monkeypatch.setattr(market, "GECKO_FALLBACK_MAX_CALLS", 2)
+    mints = [_mint(i) for i in range(100)]
+    held = mints[90]
+    sol_pool = "SolPool" + "1" * 37
+    pool = {a: "Pool" + a[:6] + "1" * 34 for a in mints}
+    tokens = {a: _gecko_token(a, pool[a]) for a in mints}
+    tokens[SOL_MINT] = _gecko_token(SOL_MINT, sol_pool, "SOL")
+    pools = {pool[a]: _gecko_pool(pool[a], a, SOL_MINT, "pumpswap") for a in mints}
+    pools[sol_pool] = _gecko_pool(sol_pool, SOL_MINT, market.USDC_MINT, "orca", base_price="150", name="SOL / USDC")
+    m, calls = _market(monkeypatch, tokens, pools)
+    m.last_held = {held}
+    best = m._fetch_pairs(mints + [SOL_MINT])
+    assert len(calls) == 2  # one token lookup of 30, one pools request
+    assert SOL_MINT in best and held in best
+    assert best[SOL_MINT]["price"] == 150
+
+
+def test_fallback_log_line_throttled(monkeypatch, capsys):
+    tokens, pools = _two_mint_feed()
+    m, calls = _market(monkeypatch, tokens, pools)
+    for _ in range(3):
+        assert len(m._fetch_pairs([MINT_A, MINT_B])) == 2
+    out = capsys.readouterr().out
+    assert out.count("via GeckoTerminal") == 1
+    assert m.gecko_fallback_stats["priced"] == 6

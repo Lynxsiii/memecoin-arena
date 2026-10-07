@@ -67,13 +67,19 @@ Discovery (where tracked tokens come from; every token carries `source` and `fir
                                 tokens (its 2026-10-07 outage answered [] for every token, SOL included), those are
                                 priced from their GeckoTerminal top pool instead (tokens/multi finds the pool,
                                 pools/multi prices it; the token carries price_source "gecko"). Pools are cached
-                                for 10 minutes (so graduations are picked up), "no pool" answers for 2 minutes.
-                                Never raises; skipped while a GeckoTerminal 429 back-off is running.
+                                for 10 minutes +-20% (so graduations are picked up), "no pool" answers for 2
+                                minutes; a token Gecko-priced under 20 s ago is reused, not re-fetched (the fast
+                                exit checks run every 10 s). SOL is priced first, then held tokens, then the rest.
+                                Never raises; skipped while a GeckoTerminal 429 back-off is running. The
+                                "priced M via GeckoTerminal" log line is printed at most every 30 s.
   ARENA_GECKO_FALLBACK_CALLS=10 max GeckoTerminal requests per price fetch for the fallback. Budget: with 150
                                 tracked tokens and every pool cached the steady state is 5-6 pools/multi requests
-                                per 30-second refresh (about 10-12 a minute, plus 1-2 per fast exit check for held
-                                tokens), under the free tier's ~30 a minute; a 429 pauses GeckoTerminal (organic
-                                discovery included) for 60 s, doubling up to 10 minutes.
+                                per 30-second refresh (about 10-12 a minute; the fast exit checks mostly reuse the
+                                20 s-fresh prices), under the free tier's ~30 a minute; a 429 pauses GeckoTerminal
+                                (organic discovery included) for 60 s, doubling up to 10 minutes.
+  ARENA_GECKO_FALLBACK_PER_MIN=18  max fallback requests per rolling minute across all price fetches (on top of
+                                the per-call cap), leaving room under the ~30/min free tier for organic discovery
+                                and traders.py; once spent, the fallback is skipped until the minute rolls on.
   ARENA_PUMPFUN=1               0/off: no pump.fun feed, no pump.fun tokens, their slots go back to the others
                                 (also read by pumpfun.py, which has the websocket settings).
   ARENA_PUMPFUN_SHARE=0.2       share of max_tracked kept for pump.fun tokens (graduated + launches).
@@ -189,10 +195,16 @@ RUG_CHECK_SECS = float(os.environ.get("ARENA_RUG_CHECK_SECS", "1800") or 1800)
 
 GECKO_FALLBACK = os.environ.get("ARENA_GECKO_FALLBACK", "1").strip().lower() not in ("0", "off", "false", "no")
 GECKO_FALLBACK_MAX_CALLS = max(0, int(float(os.environ.get("ARENA_GECKO_FALLBACK_CALLS", "10") or 0)))
-GECKO_POOL_TTL = 600         # seconds a mint's GeckoTerminal top pool stays cached (a curve can graduate)
+GECKO_FALLBACK_PER_MIN = max(0, int(float(os.environ.get("ARENA_GECKO_FALLBACK_PER_MIN", "18") or 0)))
+GECKO_FRESH_SECS = 20        # a Gecko-priced token younger than this is reused, not re-fetched (fast exit path)
+GECKO_LOG_SECS = 30          # the "priced via GeckoTerminal" line is printed at most this often
+GECKO_POOL_TTL = 600         # seconds a mint's GeckoTerminal top pool stays cached (a curve can graduate),
+                             # jittered by +-20% per mint so a full pool does not expire in one refresh
 GECKO_NOPOOL_TTL = 120       # seconds a "GeckoTerminal has no pool for it" answer is trusted
 GECKO_MULTI = 30             # addresses per tokens/multi or pools/multi request
-GECKO_DEX = {"pump-swap": "pumpswap"}  # GeckoTerminal dex ids that DexScreener spells differently
+# GeckoTerminal dex ids that DexScreener spells differently (live /networks/solana/dexes: "pump-fun" is the
+# bonding curve, "pumpswap" the post-graduation AMM; "pump-swap" kept in case it ever appears)
+GECKO_DEX = {"pump-fun": "pumpfun", "pump-swap": "pumpswap"}
 
 JUP_ON = os.environ.get("ARENA_JUPITER", "1").strip().lower() not in ("0", "off", "false", "no")
 JUP_URL = os.environ.get("ARENA_JUPITER_URL", "https://lite-api.jup.ag/swap/v1/quote")
@@ -464,7 +476,9 @@ class LiveMarket:
         self.pool_of = {}
         self.gecko_meta = {}
         self.pool_until = {}
-        self.gecko_fallback_stats = {"tokens": 0, "priced": 0, "calls": 0, "skipped": 0}
+        self.gecko_fallback_stats = {"tokens": 0, "priced": 0, "calls": 0, "skipped": 0, "reused": 0}
+        self.gecko_fb_times = deque()  # timestamps of recent fallback requests (rolling-minute budget)
+        self.gecko_fb_logged = 0.0     # when the fallback line was last printed
         self.rug_stats = {"requests": 0, "ok": 0, "pending": 0, "errors": 0}
         self.pump = None                # the shared PumpFeed, started lazily by the first real discovery
         self.pump_since = {"new": 0.0, "grad": 0.0}  # feed timestamps already consumed
@@ -809,8 +823,11 @@ class LiveMarket:
                 extra = {}
             if extra:
                 best.update(extra)
-                print(f"[market] DexScreener returned nothing for {len(missing)} tokens; "
-                      f"priced {len(extra)} via GeckoTerminal")
+                now = time.time()
+                if now - self.gecko_fb_logged >= GECKO_LOG_SECS:  # every refresh and fast check would print it
+                    self.gecko_fb_logged = now
+                    print(f"[market] DexScreener returned nothing for {len(missing)} tokens; "
+                          f"priced {len(extra)} via GeckoTerminal")
         # DexScreener reports no liquidity for pump.fun bonding curves: fill in the curve's own depth
         sol = (best.get(SOL_MINT) or {}).get("price") or self._sol_price()
         for t in best.values():
@@ -820,10 +837,13 @@ class LiveMarket:
 
     def _gecko_fallback(self, missing):
         """Price `missing` mints (DexScreener returned nothing for them) from their GeckoTerminal top pool, with at
-        most GECKO_FALLBACK_MAX_CALLS requests: tokens/multi finds (and caches) each mint's top pool, pools/multi
-        prices the pools. A pools request goes out as soon as 30 cached pools are waiting (or on the last request),
-        so even a cold cache prices tokens on the first call; SOL goes first (curve liquidity needs it).
-        Returns {mint: token dict} (see parse_gecko_pool). May raise: _fetch_pairs catches."""
+        most GECKO_FALLBACK_MAX_CALLS requests per call and GECKO_FALLBACK_PER_MIN per rolling minute (across calls):
+        tokens/multi finds (and caches) each mint's top pool, pools/multi prices the pools. A pools request goes out
+        as soon as 30 cached pools are waiting (or on the last request), so even a cold cache prices tokens on the
+        first call. Order: SOL first (curve liquidity needs it), then held tokens, then the rest. A token whose
+        current dict was Gecko-priced under GECKO_FRESH_SECS ago is returned as is (no request: the fast exit path
+        runs every 10 s and GeckoTerminal does not update that fast). When the minute budget runs out the rest is
+        skipped for this call. Returns {mint: token dict} (see parse_gecko_pool). May raise: _fetch_pairs catches."""
         now = time.time()
         for a in [a for a, until in self.pool_until.items() if until <= now]:
             del self.pool_until[a]
@@ -831,13 +851,30 @@ class LiveMarket:
             self.gecko_meta.pop(a, None)
         stats = self.gecko_fallback_stats
         stats["tokens"] += len(missing)
-        order = sorted(dict.fromkeys(missing), key=lambda a: a != SOL_MINT)
+        out, order = {}, []
+        for a in dict.fromkeys(missing):
+            cur = self.sol if a == SOL_MINT else self.tokens.get(a)
+            if (isinstance(cur, dict) and cur.get("price_source") == "gecko" and (cur.get("price") or 0) > 0
+                    and now - (cur.get("updated") or 0) < GECKO_FRESH_SECS):
+                out[a] = dict(cur)
+                stats["reused"] += 1
+            else:
+                order.append(a)
+        held = self.last_held
+        order.sort(key=lambda a: (a != SOL_MINT, a not in held))  # stable: SOL, held, then the rest in order
         lookup = [a for a in order if a not in self.pool_until]
         ready = [a for a in order if a in self.pool_of]
         stats["skipped"] += len(order) - len(lookup) - len(ready)  # known: GeckoTerminal has no pool for them
-        out, calls = {}, 0
+        times, calls = self.gecko_fb_times, 0
         while calls < GECKO_FALLBACK_MAX_CALLS and (lookup or ready):
-            last = calls == GECKO_FALLBACK_MAX_CALLS - 1
+            t_now = time.time()
+            while times and t_now - times[0] >= 60:
+                times.popleft()
+            if len(times) >= GECKO_FALLBACK_PER_MIN:  # minute budget spent: skip rather than earn a 429
+                stats["skipped"] += len(set(lookup) | set(ready))
+                break
+            times.append(t_now)
+            last = calls == GECKO_FALLBACK_MAX_CALLS - 1 or len(times) >= GECKO_FALLBACK_PER_MIN
             calls += 1
             stats["calls"] += 1
             if lookup and len(ready) < GECKO_MULTI and not (last and ready):
@@ -865,7 +902,7 @@ class LiveMarket:
                         ready.append(mint)
                 for a in batch:
                     if a in self.pool_of:
-                        self.pool_until[a] = now + GECKO_POOL_TTL
+                        self.pool_until[a] = now + GECKO_POOL_TTL * random.uniform(0.8, 1.2)
                     else:
                         self.pool_until[a] = now + GECKO_NOPOOL_TTL
                         stats["skipped"] += 1
