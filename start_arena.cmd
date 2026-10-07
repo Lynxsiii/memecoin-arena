@@ -7,11 +7,12 @@ set ARGS=%*
 :loop
 if exist stop.flag (echo stop.flag found, not restarting & goto end)
 for /f %%d in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd"') do set D=%%d
-echo [%date% %time%] starting python main.py %ARGS% >> logs\arena-%D%.log
-python main.py %ARGS% >> logs\arena-%D%.log 2>&1
+echo [%date% %time%] starting python -u main.py %ARGS% >> logs\arena-%D%.log
+python -u main.py %ARGS% >> logs\arena-%D%.log 2>&1
+set RC=%errorlevel%
 set ARGS=
-echo [%date% %time%] exited with %errorlevel%, restarting in 15s >> logs\arena-%D%.log
-timeout /t 15 /nobreak > nul
+echo [%date% %time%] exited with %RC%, restarting in 15s >> logs\arena-%D%.log
+powershell -NoProfile -Command Start-Sleep 15
 goto loop
 :end
 cmd /k
