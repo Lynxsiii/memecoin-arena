@@ -64,6 +64,12 @@ Other settings
   ARENA_TRADERS_TOP=100             leaderboard size when the constructor does not say
   ARENA_TRADERS_WINDOW_H=48         scoring window in hours
   ARENA_TRADERS_RANK_SECS=3600      seconds between rankings
+  ARENA_TRADERS_RANK=pnl            leaderboard rule: "pnl" sorts by total P&L (realized + unrealized bags); "realized"
+                                    sorts by realized P&L only and also requires the three settings below, so
+                                    whoever holds today's pumping coin does not outrank wallets that took profit
+  ARENA_TRADERS_REAL_MIN_ROUND_TRIPS=5  "realized" rule: at least this many round trips in the window
+  ARENA_TRADERS_REAL_MIN_WIN=50     "realized" rule: win rate (percent of tokens) at least this; no win rate = out
+  ARENA_TRADERS_REAL_MIN_TOKENS=3   "realized" rule: at least this many different tokens bought
   ARENA_TRADERS_KEEP_DAYS=7         stored trades older than this are deleted
   ARENA_TRADERS_GECKO_PER_MIN=6     GeckoTerminal trade requests per minute. The public API advertises ~30 a
                                     minute, but measured on 2026-10-06 the trades endpoint allowed about 7 in a
@@ -138,6 +144,10 @@ MIN_AVG_USD = _env_f("ARENA_TRADERS_MIN_AVG_USD", 20)
 MAX_TX_PER_MIN = _env_f("ARENA_TRADERS_MAX_TX_PER_MIN", 6)
 HAIRCUT = min(1.0, max(0.0, _env_f("ARENA_TRADERS_HAIRCUT", 0.15)))
 MIN_PNL = _env_f("ARENA_TRADERS_MIN_PNL", 0)
+RANK = os.environ.get("ARENA_TRADERS_RANK", "pnl").strip().lower()  # "pnl" | "realized"
+REAL_MIN_ROUND_TRIPS = int(_env_f("ARENA_TRADERS_REAL_MIN_ROUND_TRIPS", 5))
+REAL_MIN_WIN = _env_f("ARENA_TRADERS_REAL_MIN_WIN", 50)
+REAL_MIN_TOKENS = int(_env_f("ARENA_TRADERS_REAL_MIN_TOKENS", 3))
 STALE_PRICE_SECS = 6 * 3600
 HELIUS_WATCH = int(_env_f("ARENA_TRADERS_HELIUS_WATCH", 100))
 HELIUS_PER_DAY = int(_env_f("ARENA_TRADERS_HELIUS_PER_DAY", 15000))
@@ -318,10 +328,17 @@ def human_reason(st, banned=None):
     return None
 
 
-def rank_wallets(stats, top_n, banned=None):
-    """Eligible wallets sorted best first with a 1-based rank."""
+def rank_wallets(stats, top_n, banned=None, rule=None):
+    """Eligible wallets sorted best first with a 1-based rank. `rule` is "pnl" (total P&L, the default via RANK) or
+    "realized" (realized P&L only, for wallets with enough round trips, a win rate and tokens)."""
+    rule = rule or RANK
     ok = [s for s in stats.values() if human_reason(s, banned) is None]
-    ok.sort(key=lambda s: (-s["pnl_usd"], -s["roi_pct"], -s["volume_usd"]))
+    if rule == "realized":
+        ok = [s for s in ok if s["round_trips"] >= REAL_MIN_ROUND_TRIPS and s["win_rate"] is not None
+              and s["win_rate"] >= REAL_MIN_WIN and s["tokens_bought"] >= REAL_MIN_TOKENS]
+        ok.sort(key=lambda s: (-s["realized_usd"], -s["roi_pct"], -s["volume_usd"]))
+    else:
+        ok.sort(key=lambda s: (-s["pnl_usd"], -s["roi_pct"], -s["volume_usd"]))
     out = []
     for i, s in enumerate(ok[:top_n], 1):
         s = dict(s)

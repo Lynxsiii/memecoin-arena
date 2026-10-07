@@ -22,11 +22,12 @@ class CopyBot(Agent):
     team = "copy"
     max_positions = 8
 
-    def __init__(self, name, lo, hi, avatar):
+    def __init__(self, name, lo, hi, avatar, fraction=COPY_FRACTION, window_secs=COPY_WINDOW_SECS):
         super().__init__()
         self.name, self.lo, self.hi, self.avatar = name, lo, hi, avatar
+        self.fraction, self.window_secs = fraction, window_secs
         self.description = (f"Copies every buy and sell of the traders ranked {lo}-{hi} on the arena's top-100 leaderboard "
-                            f"(by profit over the last day): {COPY_FRACTION:.0%} of equity per buy, sells when they sell, "
+                            f"(by profit over the last day): {self.fraction:.0%} of equity per buy, sells when they sell, "
                             f"{SAFETY_STOP_PCT}% safety stop, {TIME_LIMIT_MIN // 60}-hour limit.")
         self.bio = {"copy-a": "Copies the top third of the leaderboard. If the best traders know something, it wants in.",
                     "copy-b": "Copies the middle third: good traders, less crowded trades.",
@@ -62,14 +63,14 @@ class CopyBot(Agent):
         tradable = {t["address"] for t in v["candidates"]}
         slots = self.max_positions - len(held)
         for mint, (s, seen_at, who) in list(self.pending.items()):
-            if now - seen_at > COPY_WINDOW_SECS:
+            if now - seen_at > self.window_secs:
                 del self.pending[mint]  # too late to call it copying
                 continue
             if mint in held or mint not in tradable:
                 continue  # wait until the market has priced it
             if slots <= 0:
                 break
-            orders.append({"action": "buy", "token": mint, "usd": v["equity"] * COPY_FRACTION,
+            orders.append({"action": "buy", "token": mint, "usd": v["equity"] * self.fraction,
                            "reason": f"copying {who}: they bought ${s.get('usd') or 0:,.0f} of {s.get('symbol') or '?'}"})
             self.copied[mint] = s["wallet"]
             del self.pending[mint]
@@ -85,3 +86,14 @@ class CopyBot(Agent):
 
 def build_copy_bots():
     return [CopyBot("Copy 1-33", 1, 33, "copy-a"), CopyBot("Copy 34-66", 34, 66, "copy-b"), CopyBot("Copy 67-100", 67, 100, "copy-c")]
+
+
+def build_copy_top10():
+    """Mechanical yardstick for Shadow: copies the 10 best wallets of the realized-profit leaderboard, quickly and big."""
+    b = CopyBot("Copy Top 10", 1, 10, "copy-a", fraction=0.10, window_secs=60)
+    b.description = (f"Copies every buy and sell of the top 10 wallets on the arena's leaderboard, ranked by realized "
+                     f"profit over the last two days: {b.fraction:.0%} of equity per buy within {b.window_secs}s of their "
+                     f"buy, sells when they sell, {SAFETY_STOP_PCT}% safety stop, {TIME_LIMIT_MIN // 60}-hour limit.")
+    b.bio = "Copies only the ten wallets with the most realized profit. A yardstick for the Shadow Claude."
+    b.catchphrase = "Ten names, no opinions."
+    return b
