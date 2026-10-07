@@ -16,6 +16,7 @@ Friction settings (environment variables, read once at import; the defaults are 
                                 fomo    the Fomo app: 0.5% with network fees included, reported $0.95 minimum per trade,
                                         sandwich-protected (no MEV slippage)
                                 jupiter swapping through Jupiter yourself: no app fee + $0.25 network
+                                pumpfun pump.fun's own site: no app fee, the venue's pool fee (1.25% on the curve, PumpSwap tiers after), $0.25 network/priority fee, no sandwich protection
                               Every setting below overrides the route's default.
   ARENA_MIN_FEE_USD           smallest app fee charged on a trade (fomo: 0.95; others: 0).
   ARENA_FEE                   app/bot fee per trade as a fraction; overrides the route's default (bot 0.01, jupiter 0).
@@ -57,6 +58,7 @@ ROUTES = {  # (app fee, minimum app fee $, network fee $ per transaction, worst 
     "bot": (0.01, 0.0, 0.25, 3.0),
     "fomo": (0.005, 0.95, 0.0, 0.0),
     "jupiter": (0.0, 0.0, 0.25, 3.0),
+    "pumpfun": (0.0, 0.0, 0.25, 3.0),
 }
 _R = ROUTES.get(ROUTE, ROUTES["bot"])
 FEE = _env("ARENA_FEE", _R[0])                                 # app/bot fee per trade
@@ -127,6 +129,9 @@ def fee_text():
     if TIERED:
         return ("Fomo app fee, tiered by order size (2% on orders under $47.50, a flat $0.95 from $47.50 to $190, "
                 "0.5% from $190, network fees included)")
+    if ROUTE == "pumpfun":
+        return ("pump.fun's own fees: 1.25% on the bonding curve and 0.30-1.25% on PumpSwap by market cap, "
+                "plus a $0.25 network fee per transaction (no app fee)")
     fee = f"{FEE * 100:g}% app fee" + (f" (at least ${MIN_FEE_USD:.2f} per trade)" if MIN_FEE_USD else "")
     net = f" plus a ${PRIORITY_FEE_USD:.2f} network fee" if PRIORITY_FEE_USD else ", network fees included"
     return fee + net
