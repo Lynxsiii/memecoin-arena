@@ -58,6 +58,10 @@ class DB:
             c.execute("INSERT INTO sqlite_sequence(name, seq) VALUES('trades', ?)", (last_id,))
             c.execute("DELETE FROM equity")
             c.commit()
+            try:
+                c.execute("VACUUM")  # give the dropped trades table's pages back; needs the commit above first
+            except Exception as e:  # a failed VACUUM must not fail the reset
+                print(f"[db] VACUUM after reset_money failed (reset itself is done): {e}")
         return season
 
     def add_council_message(self, ts, meeting, author, role, kind, text, orders):

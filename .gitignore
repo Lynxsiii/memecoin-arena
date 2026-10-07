@@ -6,7 +6,8 @@ arena_mock.db
 *.db-shm
 recordings/
 journal_backups/
-logs/
+logs/*
+!logs/.gitkeep
 __pycache__/
 *.pyc
 .pytest_cache/

@@ -1038,11 +1038,17 @@ class MockMarket:
         self.sol = {"address": SOL_MINT, "symbol": "SOL", "name": "Solana", "price": 150.0,
                     "liquidity": 50_000_000, "mcap": 7e10, "flags": [], "rating": "green",
                     "risk": {"mint_revoked": True, "freeze_revoked": True}}
+        self._spawned = 0
         for _ in range(n):
             self._spawn()
 
-    def _spawn(self):
+    def _spawn(self, kind=None):
+        """Add one fake token. Successive spawns cycle pumpfun / graduated / organic so the pump.fun lanes are
+        non-empty offline; track() passes kind="organic" to get a plain token without advancing the cycle."""
         rng = self.rng
+        if kind is None:
+            kind = ("pumpfun", "graduated", "organic")[self._spawned % 3]
+            self._spawned += 1
         a = "MOCK" + "".join(rng.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8))
         liq = rng.uniform(3_000, 200_000)
         mint_ok = rng.random() < 0.8
@@ -1058,6 +1064,15 @@ class MockMarket:
             "_rug_p": 0.0002 if mint_ok else 0.001, "_hist": [],
         }
         t["_hist"].append(t["price"])
+        t["source"], t["sources"] = kind, [kind]
+        if kind == "pumpfun":
+            curve_pct = rng.uniform(5, 90)
+            t["dex"] = "pumpfun"
+            t["mcap"] = curve_pct / 100 * GRADUATION_CAP_USD  # _annotate derives curve_pct from mcap
+            t["pump"] = {"launched": t["first_seen"] - t["age_min"] * 60, "curve_pct": round(curve_pct, 1)}
+        elif kind == "graduated":
+            t["dex"] = "pumpswap"
+            t["pump"] = {"graduated": t["first_seen"] - t["age_min"] * 60}
         _annotate(t)
         self.tokens[a] = t
 
@@ -1106,7 +1121,7 @@ class MockMarket:
         now = time.time()
         t = self.tokens.get(mint)
         if t is None:
-            self._spawn()
+            self._spawn("organic")
             a, t = self.tokens.popitem()  # the one just spawned (dicts keep insertion order)
             t.update(address=mint, symbol=("M" + mint[-4:])[:12], name="Mock " + mint[-4:], first_seen=now,
                      source=source, sources=[source], age_min=self.rng.uniform(1, 30))
