@@ -48,3 +48,9 @@ def test_old_copy_bots_keep_defaults():
 def test_build_bots_includes_copy_top10():
     from agents import build_bots
     assert [b.name for b in build_bots()][-1] == "Copy Top 10"
+
+
+def test_realized_rule_losing_gate_reads_realized():
+    stats = {"hurt": _st("hurt", 900, -1000, 6, 60, 4)}
+    assert [s["wallet"] for s in rank_wallets(stats, 10, rule="realized")] == ["hurt"]
+    assert rank_wallets(stats, 10, rule="pnl") == []

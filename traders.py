@@ -332,12 +332,13 @@ def rank_wallets(stats, top_n, banned=None, rule=None):
     """Eligible wallets sorted best first with a 1-based rank. `rule` is "pnl" (total P&L, the default via RANK) or
     "realized" (realized P&L only, for wallets with enough round trips, a win rate and tokens)."""
     rule = rule or RANK
-    ok = [s for s in stats.values() if human_reason(s, banned) is None]
-    if rule == "realized":
+    if rule == "realized":  # the "losing" gate reads realized profit: unrealized bags neither help nor hurt
+        ok = [s for s in stats.values() if human_reason({**s, "pnl_usd": s["realized_usd"]}, banned) is None]
         ok = [s for s in ok if s["round_trips"] >= REAL_MIN_ROUND_TRIPS and s["win_rate"] is not None
               and s["win_rate"] >= REAL_MIN_WIN and s["tokens_bought"] >= REAL_MIN_TOKENS]
         ok.sort(key=lambda s: (-s["realized_usd"], -s["roi_pct"], -s["volume_usd"]))
     else:
+        ok = [s for s in stats.values() if human_reason(s, banned) is None]
         ok.sort(key=lambda s: (-s["pnl_usd"], -s["roi_pct"], -s["volume_usd"]))
     out = []
     for i, s in enumerate(ok[:top_n], 1):
