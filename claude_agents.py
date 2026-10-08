@@ -10,6 +10,7 @@ import time
 
 import exchange
 import market
+import signals as sig
 from agent_base import Agent
 
 # The brief every Claude gets. It is IDENTICAL for every model so the model comparison stays fair; personas only
@@ -52,13 +53,20 @@ What the arena does for you:
 - Structure: each candidate carries "structure", the signals above measured from the pool's recent trades and holders:
   net_inflow_1h_usd, net_share (net buying as a share of all volume, -1 to 1), buyers_1h, round_trip_share (volume from
   wallets buying and selling within a minute: churn), top_buyer_share, flow_quality, insider_pct, top10_pct,
-  creator_pct, creator_sold_usd, lp_locked_pct, minutes_since_graduation, liquidity_vs_1h_pct and flags. Read them as a
+  creator_pct, creator_sold_usd, lp_locked_pct, minutes_since_graduation, liquidity_vs_1h_pct and flags; on a curve coin
+  also curve_pct, curve_pct_chg_10m, ramp ("early" under 40% filled, "ramp" 40-80%, "late" past 80%) and ramp_setup
+  (true: in the ramp with net buying from many wallets, no veto, no straight-run chart); chart_tell "straight run" when
+  the price went up in one straight green run since tracking began (a bundle pattern, shown as a flag). Read them as a
   whole; none is a rule on its own.
 - Exit ladder on every position you hold: {LADDER_TEXT} You can still sell
   whenever you want and set your own stops and targets on top.
 - Moonshots, lives, points and the strategy room are described below.
 
 Playbook (what the data means; you decide what to do with it):
+- Ramp: on the run-8 recordings the only entry that paid was buying a curve coin as its
+  fill crossed 40-60% with net buying from many wallets and selling at graduation or a -30% stop; coins that reach
+  half the curve graduate about half the time, and the curve's own math lifts the price into graduation. Dip-buys,
+  chasing fast fills and buying at first sight all lost after costs. ramp_setup marks coins in that window.
 - Rugs that look strong: last night every brand-name coin (ChatGPT, Apple, NVIDIA, Tesla, Nike...) and every fresh
   graduate carrying $80k+ of liquidity died within an hour; a real migration brings about $12k, so a huge pool minutes
   after graduation is injected liquidity waiting to be pulled. The arena now vetoes both. Treat a famous name or an
@@ -82,6 +90,7 @@ Playbook (what the data means; you decide what to do with it):
 
 Order formats:
   {"action": "buy",  "token": "<address>", "usd": <dollars>, "reason": "<short reason>", ...optional exit fields, "moonshot": true (optional),
+                    "sell_at_graduation": true (optional, curve coins: the arena sells all of it the moment the coin graduates),
                     "following": "<leader wallet as shown in your_leaders>" (optional, shadow traders only)}
   {"action": "sell", "token": "<address>", "fraction": <0 to 1>, "reason": "<short reason>"}
   {"action": "exits", "token": "<address>", ...exit fields}   (set or change exits on a position, no trade)
@@ -154,7 +163,7 @@ What each look shows you:
 
 Rules:
 - {SIZE_RULE} At most 8 open positions.
-{BUY_RATION_TEXT}- Orders fill shortly after you answer (usually within a minute), at whatever the price is then.
+{HARD_STOP_TEXT}{BUY_RATION_TEXT}- Orders fill shortly after you answer (usually within a minute), at whatever the price is then.
 - next_check_min is when you want to look again, from {MIN_CHECK} to {MAX_CHECK} minutes;
   look every minute if the market calls for it. Between looks only your exits, the exit ladder, your alarms and the
   watcher act for you.
@@ -181,7 +190,8 @@ UNIVERSE_TEXT_ALL = """- candidates: the busiest tokens that passed the vetoes, 
   2, 5, 10, 20 and 30 minutes ago to now, from the arena's own 30-second price history, and swing_30m its noise level."""
 UNIVERSE_TEXT_PUMPFUN = """- graduates: pump.fun coins that graduated to PumpSwap in the last 6 hours and passed the vetoes, newest first (the
   top 15, plus any coin the watcher woke you for), each with minutes_since_graduation and its "structure".
-- curve: pump.fun coins still on their bonding curve that passed the vetoes (the top 15, plus any coin the watcher woke you for), the fastest-filling first.
+- curve: pump.fun coins still on their bonding curve that passed the vetoes (the top 15, plus any coin the watcher woke you for):
+  ramp_setup coins first (most filled first), then the fastest-filling.
   curve_pct is how far the curve has filled (0-100); curve_pct_chg_10m is how much it filled in the last 10 minutes
   (for a coin tracked under 10 minutes, its fill since tracking began scaled to a 10-minute pace; null in its first 2
   minutes).
@@ -226,6 +236,15 @@ def buy_ration_text(ar):
             f"buys you have left and the minutes until\n  you may buy again. Spend them on your best setups.\n")
 
 
+def hard_stop_text(ar):
+    """The Rules line for the arena's hard stop (arena.HARD_STOP_PCT); empty when it is off."""
+    if not ar.HARD_STOP_PCT:
+        return ""
+    moon = f" (moonshots -{ar.MOONSHOT_MIN_STOP:g}%)" if ar.MOONSHOT_MIN_STOP else ""
+    return (f"- Every position has a hard {ar.HARD_STOP_PCT:g}% stop from your average entry{moon}; you may set a tighter "
+            f"one, never a looser one. Never average down: a coin under your entry is a coin to leave.\n")
+
+
 def fill_brief(text, min_check, max_check):
     """Fill the brief's placeholders: look interval, journal size, fees and costs, lives and the bust line."""
     import arena as _ar  # the moonshot and runner settings live with the rules that enforce them
@@ -233,6 +252,7 @@ def fill_brief(text, min_check, max_check):
     text = text.replace("{UNIVERSE_TEXT}", universe)  # first: the pump.fun text carries {FEE_TEXT}
     text = text.replace("{SOURCE_TEXT}", SOURCE_TEXT_PUMPFUN if market.UNIVERSE == "pumpfun" else SOURCE_TEXT_ALL)
     text = text.replace("{BUY_RATION_TEXT}", buy_ration_text(_ar))
+    text = text.replace("{HARD_STOP_TEXT}", hard_stop_text(_ar))
     lives = max(1, int(os.environ.get("ARENA_LIVES", "3") or 3))
     bust = float(os.environ.get("ARENA_BUST_PCT", "10") or 10)
     text = text.replace("{REGEN_TEXT}", regen_brief_text(lives))
@@ -255,22 +275,29 @@ MAX_BUY_FRAC = min(1.0, max(0.01, float(os.environ.get("ARENA_LLM_MAX_BUY_PCT", 
 
 # Same model and rules, different trading style
 PERSONAS = {
-    "degen": ("Degen", "Your style: degen. You hunt fresh curve coins and fast movers in both lanes, size big (a quarter of your "
+    "degen": ("Degen", "Your style: degen. You hunt fresh curve coins in their ramp and fresh graduates with net buying, size big (a quarter of your "
                        "cash or more when you like a setup), take profits fast and move on. You expect to burn lives; that is what they are for. You still "
                        "skip the obvious rugs the vetoes leave behind, like a red rating. "
-                       "You do not wait for an hour-old calm coin; that is not your style. On any look where you hold nothing, buy the strongest-looking candidate available (best net inflow or fastest curve fill that is not red-rated), size it to the pool, set a stop, and move on. Most of these lose; the one that runs is the point."),
+                       "You do not wait for an hour-old calm coin; that is not your style. On any look where you hold nothing, buy the best ramp_setup or fresh graduate with net buying, size it to the pool, set a stop, and move on. Most of these lose; the one that runs is the point."),
     "ape": ("Ape", "Your style: ape. One conviction coin per life: when you find a curve coin or fresh graduate with real net "
                    "buying from many wallets, you put a large share of your cash into it (think a third to two thirds, sized "
                    "to the pool so your own exit doesn't crush the price), hold for the multiple and let the ladder take "
                    "profits. Don't flag these as moonshots; that caps the size. Each life is a lottery ticket on one coin; "
                    "when it busts you pick the next. "
-                   "You do not wait for an hour-old calm coin; that is not your style. On any look where you hold nothing, buy the strongest-looking candidate available (best net inflow or fastest curve fill that is not red-rated), size it to the pool, set a stop, and move on. Most of these lose; the one that runs is the point."),
+                   "You do not wait for an hour-old calm coin; that is not your style. On any look where you hold nothing, buy the best ramp_setup or fresh graduate with net buying, size it to the pool, set a stop, and move on. Most of these lose; the one that runs is the point."),
+    "ramp": ("Ramp", "Your style: ramp trader. You buy bonding-curve coins while their fill crosses 40-60% (ramp_setup) with net "
+                     "buying from many wallets and no bundle tells, and you cash out at graduation: put \"sell_at_graduation\": true on the "
+                     "buy so the arena sells the moment the coin migrates. Stop -30%. You skip coins already past 80%, coins with a "
+                     "straight-green-run chart, and anything the vetoes flag. Several ramps a day beat one home run."),
     "skeptic": ("Skeptic", "Your style: skeptic. You trade graduates only, never the bonding curve. You assume every coin is a rug until its "
                            "holders, LP lock and flow prove otherwise: no concentrated holders, liquidity that is deep and "
                            "holding, net buying that is real. You size small. You hold cash when nothing passes your checks, "
                            "but you do buy the coins that pass them."),
-    "scalper": ("Scalper", "Your style: scalper. You trade short-term 5-minute momentum, look again often (every 2 to 5 "
-                           "minutes), take 10-20% profits quickly and cut losers fast at around -8%."),
+    # Run 9: rewritten after the Cupsey breakdown (video 3): tiny early buys, take profit every time, no home runs.
+    "scalper": ("Scalper", "Your style: scalper. You buy curve coins early, $5k-$20k market cap, in small size ($50-$100), "
+                           "only when buyers outnumber sellers and the chart shows two-way trading, and you take profit at "
+                           "+30% to +50% every time without exception. Stop -30%. Many small wins, no home runs, never hold "
+                           "through graduation."),
     # The twin adds NO style text: same model, same brief as the plain model agent. Any gap between the two
     # is run-to-run noise, which is the yardstick for how much of everyone else's lead is luck.
     "twin": ("Twin", ""),
@@ -330,6 +357,12 @@ CHARACTER = {
                         "stuck around afterwards.", "Only graduates need apply."),
     "sonnet-runner": ("Sonnet in a headband, sprinting after the few coins that run 10x and letting the rest go.",
                       "Most lose. One runs."),
+    "haiku-ramp": ("Haiku on a skateboard, riding bonding curves up the ramp and stepping off the moment a coin graduates.",
+                   "Up the ramp. Off at the top."),
+    "sonnet-ramp": ("Sonnet on a skateboard: curve coins in mid-fill, net buying confirmed, cashed out at graduation.",
+                    "Half full is the sweet spot."),
+    "haiku-scalper": ("Haiku in a sweatband: tiny early buys, profit taken every single time, never a home run.",
+                      "Thirty percent and gone."),
     "sonnet-copycat": ("Sonnet with cat ears, glued to one top trader's wallet, copying the moves it trusts and "
                        "making its own exits.", "Monkey see, Sonnet decides."),
     "council": ("Three Claudes, one wallet: two Sonnet analysts argue, Opus listens, then makes the call. Teamwork, tested.",
@@ -408,7 +441,8 @@ GRADUATE_WINDOW = 6 * 3600  # graduates stay in their lane this long after migra
 def build_lanes(candidates, vetoed, chg_since, now, view=None, structure=None, pinned=None):
     """Split pump.fun tokens into the two lanes a Claude sees in the pumpfun universe, vetoed ones left out.
     graduates: migrated within GRADUATE_WINDOW, newest first, with minutes_since_graduation.
-    curve: still on the bonding curve, fastest-filling over the last 10 minutes first (then the most filled), with
+    curve: still on the bonding curve, ramp_setup coins first (structure[addr]["ramp_setup"], most filled first), then
+    fastest-filling over the last 10 minutes first (then the most filled), with
     curve_pct and curve_pct_chg_10m (for a coin tracked under 10 minutes, its fill since tracking began scaled to a
     10-minute pace; None in its first 2 minutes).
     pinned: tokens a watcher hit woke the agent for. Each lane keeps them past LANE_CAP (appended at the end) and a pinned
@@ -437,12 +471,13 @@ def build_lanes(candidates, vetoed, chg_since, now, view=None, structure=None, p
 
     def curve_row(t):
         pct = float((t.get("pump") or {}).get("curve_pct") or 0)
-        cs = chg_since.get(t["address"]) or {}
-        past, secs = cs.get("curve_pct_10m"), cs.get("curve_pct_10m_secs") or 600
         # a coin tracked under 10 minutes: its fill since tracking began, scaled to a 10-minute pace
-        d = round((pct - past) * 600 / min(600, max(105, secs)), 1) if past is not None else None
-        return t, pct, d
-    rows = sorted(map(curve_row, curve), key=lambda r: (-(r[2] or 0), -r[1]))
+        return t, pct, sig.curve_pace(pct, chg_since.get(t["address"]))
+
+    def ramp_first(r):  # run 9: ramp_setup coins first, most filled first; then the momentum order
+        ramp = bool(((structure or {}).get(r[0]["address"]) or {}).get("ramp_setup"))
+        return (0, -r[1]) if ramp else (1, -(r[2] or 0), -r[1])
+    rows = sorted(map(curve_row, curve), key=ramp_first)
     lanes["curve"] = [{**_format_candidate(t, v, structure), "curve_pct": round(pct, 1), "curve_pct_chg_10m": d}
                       for t, pct, d in capped(rows, lambda r: r[0]["address"])]
     return lanes
@@ -653,6 +688,7 @@ class LLMAgent(Agent):
             "positions": [{**{k: p.get(k) for k in ("token", "symbol", "value", "cost", "pnl_pct", "price_chg_pct", "held_min",
                                                     "rating", "flags", "exits")},
                            **({"moonshot": True} if p.get("moonshot") else {}),
+                           **({"sell_at_graduation": True} if p.get("sell_at_graduation") else {}),
                            **({"swing_30m": v["chg_since"][p["token"]]["swing_30m"]}
                               if "swing_30m" in v.get("chg_since", {}).get(p["token"], {}) else {})}
                           for p in v["positions"]],
@@ -922,8 +958,10 @@ class CouncilAgent(LLMAgent):
 # Run 8 (2026-10-07): pump.fun only, Haiku 5.5 x4 (Graduate, Runner, Skeptic, Shadow) plus Sonnet 5.5 x2 (Graduate,
 # Shadow) to see whether the cheaper model matches the dearer one on the same strategies.
 # Run 8b (2026-10-07, mid-run): two risk-taker Haikus join (Degen, Ape) now that points are the best life's high-water mark.
-DEFAULT_LINEUP = ("claude-haiku-5-5:graduate,claude-haiku-5-5:runner,claude-haiku-5-5:skeptic,claude-haiku-5-5:shadow,"
-                  "claude-sonnet-5-5:graduate,claude-sonnet-5-5:shadow,claude-haiku-5-5:degen,claude-haiku-5-5:ape")
+# Run 9 (2026-10-08): the run-8 replay found one positive entry (curve coins crossing 40-60%, sold at graduation or -30%),
+# so Ramp (Haiku and Sonnet) replaces Runner and Skeptic, and the Cupsey-style Scalper returns; Sonnet Shadow is retired.
+DEFAULT_LINEUP = ("claude-haiku-5-5:ramp,claude-sonnet-5-5:ramp,claude-haiku-5-5:graduate,claude-sonnet-5-5:graduate,"
+                  "claude-haiku-5-5:scalper,claude-haiku-5-5:shadow,claude-haiku-5-5:degen,claude-haiku-5-5:ape")
 
 
 def build_llm_agents():

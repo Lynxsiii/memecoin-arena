@@ -57,6 +57,17 @@ Creator and Token-2022 extensions (read by signals.py; flags() does not use them
                         from transfer_fee_pct (RugCheck's own `transferFee.pct`) because RugCheck has been seen
                         reporting pct 0 for a mint whose extension charged 200 basis points.
 
+Holder SOL balances (run 9, for signals.py's bundle-balance veto):
+  top_holders[i]["sol"]  the holder's OWNER wallet SOL balance (lamports / 1e9; a wallet the chain has no account for
+                         is 0.0), from one getMultipleAccounts on the owners (base64, no data). The RPC holder path
+                         already makes that call for its PDA check and records the balances from it; otherwise one
+                         extra request per assess() goes to RUG_RPC_URL (getMultipleAccounts works on the public
+                         endpoint). A failure leaves `sol` out (unknown, never a veto) and pauses the lookup for
+                         SOL_PAUSE_SECS (60) so a dead RPC costs at most one timeout a minute. RUG_HOLDER_SOL=0 turns
+                         it off.
+  top5_sol               the balances of the top 5 holders in holder order, pool / LP / locker / burn accounts
+                         (already out of top_holders) and the creator left out; None for an unknown balance.
+
 LP lock (lp_locked_pct): liquidity-weighted average of lp.lpLockedPct over markets that have LP tokens
   (lp.lpTotalSupply > 0). pump.fun bonding curves and PumpSwap pools report 100 (LP burned), classic Raydium pools
   report the burned/locked share, concentrated-liquidity pools (Orca Whirlpool, Meteora DLMM, Raydium CLMM) have no
@@ -92,8 +103,9 @@ Other environment variables:
                           holder list; always = also when RugCheck succeeded (RPC numbers then win, they are live).
 Rate-limit behaviour: a 429 from RugCheck pauses RugCheck calls for Retry-After (default 30 s); the per-method 429
 from the RPC disables the RPC holder scan for 10 minutes; while paused, and when the local per-minute cap is hit,
-assess() returns None (retry later) rather than making the request. Request cost: 1 request per call by default
-(RugCheck only); 3 more when the RPC path runs. Nothing is cached here beyond the pause timers - the caller keeps
+assess() returns None (retry later) rather than making the request. Request cost: 2 requests per call by default
+(RugCheck, then the holders' SOL balances); 3 more when the RPC path runs (which covers the balances itself).
+Nothing is cached here beyond the pause timers - the caller keeps
 its own risk cache.
 """
 import os
@@ -109,6 +121,9 @@ PUBLIC_RPC = "https://api.mainnet-beta.solana.com"
 RPC_URL = os.environ.get("RUG_RPC_URL", PUBLIC_RPC).rstrip("/")
 RPC_HOLDERS = os.environ.get("RUG_RPC_HOLDERS", "auto").strip().lower()
 RPC_PAUSE_SECS = 600
+HOLDER_SOL = os.environ.get("RUG_HOLDER_SOL", "1").strip().lower() not in ("0", "off", "false", "no")
+SOL_PAUSE_SECS = 60
+LAMPORTS = 1_000_000_000
 
 
 def _env(name, default):
@@ -166,6 +181,7 @@ _DANGER_RISKS = (("permanent delegate", re.compile(r"permanent (delegate|control
 _rc_times = deque()       # timestamps of RugCheck requests in the last minute
 _rc_paused_until = 0.0
 _rpc_paused_until = 0.0
+_sol_paused_until = 0.0   # holder SOL balance lookups pause here after a failure
 last_cost = {"requests": 0, "seconds": 0.0}   # cost of the most recent assess() call, for the caller's logs
 
 
@@ -449,12 +465,13 @@ def _rpc_holders(session, mint, info, cost):
         except (KeyError, TypeError):
             owners.append(None)
     distinct = [o for o in dict.fromkeys(o for o in owners if o)]
-    pda = set()
+    pda, sol = set(), {}
     if distinct:
         own = _rpc(session, {"jsonrpc": "2.0", "id": 4, "method": "getMultipleAccounts",
                              "params": [distinct, {"encoding": "base64", "dataSlice": {"offset": 0, "length": 0}}]},
                    cost)[0]
         for o, v in zip(distinct, ((own.get("result") or {}).get("value")) or []):
+            sol[o] = _sol(v)
             if v and v.get("owner") not in (None, SYSTEM_PROGRAM):
                 pda.add(o)  # owned by a program: pool vault, locker, escrow - not a person's wallet
     known_pool_owners = {h.get("owner") for h in info.get("_rc_pool_owners", ())}
@@ -465,7 +482,7 @@ def _rpc_holders(session, mint, info, cost):
             excluded += pct
             n_ex += 1
         else:
-            holders.append({"pct": _pct(pct), "owner": owner})
+            holders.append({"pct": _pct(pct), "owner": owner, **({"sol": sol[owner]} if owner in sol else {})})
     holders.sort(key=lambda h: -h["pct"])
     info.update(top1_pct=holders[0]["pct"] if holders else 0.0,
                 top10_pct=_pct(sum(h["pct"] for h in holders[:10])),
@@ -473,6 +490,41 @@ def _rpc_holders(session, mint, info, cost):
                 holders_note=(f"RPC top-20 token accounts; excluded {n_ex} program-owned/pool/burn account"
                               f"{'s' if n_ex != 1 else ''} holding {excluded:.1f}% of supply"))
     info["checked_sources"].append("rpc")
+
+
+def _sol(v):
+    """SOL balance of one getMultipleAccounts value (None = no such account = 0 SOL)."""
+    try:
+        return round(int((v or {}).get("lamports") or 0) / LAMPORTS, 4)
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _holder_balances(session, info, cost):
+    """Record each top holder's owner-wallet SOL balance (`sol`) and `top5_sol` (module docstring). Never raises."""
+    global _sol_paused_until
+    holders = [h for h in info.get("top_holders") or () if isinstance(h, dict)]
+    need = [o for o in dict.fromkeys(h.get("owner") for h in holders if "sol" not in h) if o]
+    if need and time.time() >= _sol_paused_until:
+        try:
+            res = _rpc(session, {"jsonrpc": "2.0", "id": 5, "method": "getMultipleAccounts",
+                                 "params": [need, {"encoding": "base64", "dataSlice": {"offset": 0, "length": 0}}]},
+                       cost)[0]
+            values = (res.get("result") or {}).get("value")
+            if isinstance(values, list) and len(values) == len(need):
+                bal = {o: _sol(v) for o, v in zip(need, values)}
+                for h in holders:
+                    if h.get("owner") in bal and bal[h["owner"]] is not None:
+                        h["sol"] = bal[h["owner"]]
+            else:
+                _sol_paused_until = time.time() + SOL_PAUSE_SECS
+        except Exception:  # _Transient or a malformed answer: balances stay unknown
+            _sol_paused_until = time.time() + SOL_PAUSE_SECS
+    if holders:
+        creator = info.get("creator")
+        rest = [h for h in holders if not h.get("creator") and not (creator and h.get("owner") == creator)]
+        top5 = [h.get("sol") for h in rest[:5]]
+        info["top5_sol"] = top5 if any(s is not None for s in top5) else None
 
 
 # ----------------------------------------------------------------------------------------------- public API
@@ -504,6 +556,8 @@ def assess(session, mint, decimals=None):
                                            if isinstance(v, dict) and v.get("type") in ("AMM", "LOCKER")]
             _rpc_holders(session, mint, info, cost)
             info.pop("_rc_pool_owners", None)
+        if HOLDER_SOL and info.get("top_holders") and not info["error"]:
+            _holder_balances(session, info, cost)
     except _Transient as e:
         last_cost.update(requests=cost["requests"], seconds=round(time.time() - t0, 2), note=str(e))
         return None

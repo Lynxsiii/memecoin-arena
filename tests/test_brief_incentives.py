@@ -11,5 +11,6 @@ def test_brief_incentives():
 
 def test_risk_personas_buy_when_flat():
     for key in ("degen", "ape"):
-        assert "buy the strongest-looking candidate" in PERSONAS[key][1]
+        assert "buy the best ramp_setup or fresh graduate with net buying" in PERSONAS[key][1]
+
     assert "never chase a coin that already ran" not in PERSONAS["runner"][1]

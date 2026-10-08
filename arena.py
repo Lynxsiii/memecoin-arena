@@ -9,6 +9,13 @@ Settings (environment variables, read when the Arena is built):
   ARENA_FAST_EXIT_SECS=10   seconds between fast exit checks inside a tick (0 disables them). Each check costs
                             one DexScreener request per 30 held tokens in the live market and nothing in the mock.
   ARENA_SHADOW_LEADERS=10   how many top wallets a shadow trader follows (its leader set, re-picked every 6 hours).
+  ARENA_HARD_STOP_PCT=-30   run 9: every Claude position is sold in full once its price is this far under the average
+                            entry (moonshots: -ARENA_MOONSHOT_MIN_STOP, i.e. -50%), unless the Claude set a tighter
+                            stop_loss_pct of its own (its own stop then fires through check_exits). 0 turns it off.
+                            Part of the managed exits (check_managed), so ARENA_MANAGED_EXITS=0 turns it off too.
+  Sell at graduation (run 9): a buy of a bonding-curve coin (dex "pumpfun" at the fill) carrying the order field
+                            "sell_at_graduation": true is sold in full on the first managed-exit check after the coin
+                            shows pump.graduated (or moves to PumpSwap). Off unless the order asks for it.
   ARENA_LLM_MAX_BUYS_PER_DAY=0, ARENA_LLM_MIN_BUY_USD=50, ARENA_LLM_BUY_COOLDOWN_MIN=0   churn control for Claudes (not bots): at most
                             this many buys in a rolling 24 hours, none smaller than the minimum, this many minutes between
                             buys (0 turns a rule off; since run 8b only the $50 minimum is on). A refused buy is listed in
@@ -84,6 +91,9 @@ LADDER_TRAIL = [(10.0, 15.0), (5.0, 20.0), (2.0, 30.0)]          # (peak multipl
 TIME_STOP_H = float(os.environ.get("ARENA_TIME_STOP_H", "6") or 6)
 LIQ_EXIT = 0.5          # sell everything when the pool's liquidity falls under half of what it was at entry
 CREATOR_SELL_USD = float(os.environ.get("ARENA_CREATOR_SELL_USD", "100") or 100)
+# Run 9 hard stop (module docstring): run 8's own stops at -35% filled near -95%; the video breakdown's rule is a hard
+# -30% and never averaging down. Stored negative; 0 = off.
+HARD_STOP_PCT = -abs(float(os.environ.get("ARENA_HARD_STOP_PCT", "-30") or 0))
 # Churn control for Claudes (bots are exempt): a Claude may make at most MAX_BUYS_PER_DAY buys in any rolling 24 hours, none
 # under MIN_BUY_USD, and must wait BUY_COOLDOWN_MIN minutes between buys. 0 turns a rule off; since run 8b (the user's choice)
 # the cap and the cooldown are off by default and only the $50 minimum stays.
@@ -246,7 +256,8 @@ class Arena:
                 if rep_["vetoes"]:
                     vetoes[a] = rep_["vetoes"]
                 trend = sig.liquidity_trend(list(self.liq_history.get(a, ())))
-                structure[a] = sig.structural_view(t, flows.get(a), trend, mig, sold.get(a), now)
+                structure[a] = sig.structural_view(t, flows.get(a), trend, mig, sold.get(a), now,
+                                                   chg=self.chg_since(a, now), prices=list(self.history.get(a, ())))
             self.vetoes, self.structure, self.creator_sold = vetoes, structure, sold
         except Exception as e:
             print(f"[arena] signals failed (keeping the last ones): {e}")
@@ -883,6 +894,7 @@ class Arena:
                 "token": a, "symbol": p["symbol"], "qty": p["qty"], "cost": round(p["cost"], 2),
                 "value": round(value, 2), "pnl_pct": round((value / p["cost"] - 1) * 100, 1) if p["cost"] else 0,
                 "held_min": round((now - p["opened"]) / 60, 1), "opened": p["opened"], "moonshot": bool(p.get("moonshot")),
+                "sell_at_graduation": bool(p.get("sell_at_graduation")),
                 "rating": (t or {}).get("rating", "red"), "flags": (t or {}).get("flags", []),
             })
         # Failed transactions from the last hour, newest last, so an agent can see "your buy of X failed".
@@ -1073,6 +1085,9 @@ class Arena:
                 pos["moonshot"] = True
             if o.get("following"):
                 pos["copied_wallet"] = o["following"]  # the shadow's leader-sell exit watches this wallet
+            pos.setdefault("entry_dex", str(t.get("dex") or "").lower() or None)
+            if o.get("sell_at_graduation") in (True, "true", "True"):
+                pos["sell_at_graduation"] = True  # check_managed sells it all when the coin graduates
             pos["cost_in"] = pos.get("cost_in", pos["cost"]) + usd  # everything ever put in (for the runner bonus)
             pos.setdefault("liq_entry", t.get("liquidity") or 0)
             pos.setdefault("peak_ts", now)
@@ -1161,11 +1176,25 @@ class Arena:
                 plan["trailing_pct"] = max(plan["trailing_pct"], MOONSHOT_MIN_TRAIL)
         return True
 
+    def hard_stop(self, acct, token, pos):
+        """The hard stop (% from the average entry, negative) for one Claude position, or None when there is none: off,
+        or the Claude's own stop_loss_pct is tighter. Moonshots get their -MOONSHOT_MIN_STOP floor instead."""
+        if not HARD_STOP_PCT:
+            return None
+        level = -MOONSHOT_MIN_STOP if pos.get("moonshot") else HARD_STOP_PCT
+        if not level:
+            return None
+        own = (acct.get("exits", {}).get(token) or {}).get("stop_loss_pct")
+        if own is not None and own > level:
+            return None  # its own, tighter stop fires first (check_exits)
+        return level
+
     def _queued(self, name, token):
         return any(n == name and o.get("token") == token and o.get("action") == "sell" for n, o in self.pending)
 
     def check_managed(self, now):
-        """The exit ladder, trailing stop, time stop and event exits on every Claude position (see LADDER). Sells are
+        """Sell at graduation (ramp positions), the hard stop (HARD_STOP_PCT), the exit ladder, trailing stop, time stop
+        and event exits on every Claude position (see LADDER). Sells are
         queued as exits and fill on the next tick or fast check. Also the shadow trader's exit when the leader it copied
         into a position (copied_wallet) sells that token."""
         if not MANAGED_EXITS:
@@ -1189,7 +1218,12 @@ class Arena:
                 peak_mult = pos["peak_price"] / entry
                 sell, why = None, None
                 liq, liq0 = (t or {}).get("liquidity") or 0, pos.get("liq_entry") or 0
-                if liq0 and liq < liq0 * LIQ_EXIT:
+                pump = (t or {}).get("pump") or {}
+                graduated = bool(pump.get("graduated")) or str((t or {}).get("dex") or "").lower() == "pumpswap"
+                stop = self.hard_stop(acct, token, pos)
+                if pos.get("sell_at_graduation") and pos.get("entry_dex") == "pumpfun" and graduated:
+                    sell, why = 1.0, "ramp: graduated, cashing the curve"
+                elif liq0 and liq < liq0 * LIQ_EXIT:
                     sell, why = 1.0, f"liquidity pulled: the pool is down {(1 - liq / liq0) * 100:.0f}% since you bought"
                 elif creator_sold.get(token, 0) >= CREATOR_SELL_USD and creator_sold.get(token, 0) > 0:
                     sell, why = 1.0, f"creator sold: ${creator_sold[token]:,.0f} dumped by the token's creator"
@@ -1205,7 +1239,9 @@ class Arena:
                         sell, why = 1.0, f"leader sold: {self._short_wallet(w)}, the wallet you copied, sold this {ago_text(now - s['ts'])}"
                 if sell is None:
                     trail = next((tr for m, tr in LADDER_TRAIL if peak_mult >= m), None)
-                    if trail is not None and spot <= pos["peak_price"] * (1 - trail / 100):
+                    if stop is not None and mult <= 1 + stop / 100:
+                        sell, why = 1.0, f"hard stop: {stop:g}% from entry" + (" (moonshot floor)" if pos.get("moonshot") else "")
+                    elif trail is not None and spot <= pos["peak_price"] * (1 - trail / 100):
                         sell, why = 1.0, f"exit ladder trailing stop: {(1 - spot / pos['peak_price']) * 100:.0f}% off the peak (trail {trail:g}% after {peak_mult:.1f}x)"
                     elif now - pos.get("peak_ts", pos.get("opened", now)) >= TIME_STOP_H * 3600:
                         sell, why = 1.0, f"time stop: no new high in {TIME_STOP_H:g} hours"

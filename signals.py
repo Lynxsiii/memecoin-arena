@@ -55,12 +55,31 @@ API
       -> {"vetoes": [...], "flags": [...], "unknowns": [...]}
       vetoes = hard rejects; flags = soft warnings worth showing; unknowns = checks that could not run because the
       data is missing or stale. Missing data is never a veto.
-  structural_view(token, flow, liq_trend, migrated_min_ago, creator_sold_usd, now=None) -> dict
+  structural_view(token, flow, liq_trend, migrated_min_ago, creator_sold_usd, now=None, chg=None, prices=None)
+      -> dict
       Compact per-candidate evidence for an LLM prompt, only keys with data: net_inflow_1h_usd, net_share,
       buyers_1h, round_trip_share, top_buyer_share, flow_quality, insider_pct, top10_pct, creator_pct,
       creator_sold_usd (0 = creator known, no sells seen), lp_locked_pct (not on pump.fun pools, where LP is
-      burned by construction), minutes_since_graduation, liquidity_vs_1h_pct, flags (soft flags, at most
-      MAX_VIEW_FLAGS), vetoes (only when there are any). About 100-320 characters of JSON per token.
+      burned by construction), minutes_since_graduation, liquidity_vs_1h_pct, chart_tell, flags (soft flags, at
+      most MAX_VIEW_FLAGS; the chart-tell flag first), vetoes (only when there are any). About 100-320 characters
+      of JSON per token. For a coin still on its bonding curve (dex or source "pumpfun", not graduated, curve_pct
+      known) also: curve_pct; curve_pct_chg_10m (curve_pace() of `chg`, the arena's chg_since entry for the coin);
+      ramp: "early" (curve_pct < RAMP_MIN_PCT), "ramp" (RAMP_MIN_PCT..RAMP_MAX_PCT) or "late" (above); and
+      ramp_setup: true when the coin is in the ramp window, has net buying (net_share >= RAMP_MIN_NET_SHARE from
+      RAMP_MIN_BUYERS or more buying wallets; without pool-feed flow: buys_h1 > sells_h1 and buys_h1 >=
+      RAMP_MIN_BUYERS, transaction counts standing in for wallets), no veto and no chart tell. `prices` is the
+      arena's 30-second price history [(ts, price), ...] for chart_tell().
+  curve_pace(curve_pct, chg) -> float | None
+      Curve fill over the last 10 minutes from a chg_since entry (curve_pct_10m, curve_pct_10m_secs); a coin
+      tracked under 10 minutes gets its fill since tracking began scaled to a 10-minute pace; None without a
+      reference point.
+  chart_tell(prices) -> {"green_run": int, "chart_tell": "straight run" | None}
+      Video-1 chart tell from the arena's 30-second price history [(ts, price), ...], oldest first. green_run = how
+      many consecutive ticks from the first point did not fall (one dip of at most CHART_WIGGLE_PCT is forgiven);
+      "straight run" when the history has at least CHART_MIN_POINTS points, every tick since tracking began is in
+      that run, and the price is at least CHART_MIN_MULT x the first point: one straight green run with no red
+      candle, the pattern of a bundled launch. A soft flag (structure.flags), never a veto: it is a pattern, not
+      proof. Run 9 (2026-10-08).
 
 Vetoes (Tier 0-1 hard rejects with the data this arena has; thresholds below, all overridable):
   mint authority not revoked; freeze authority not revoked (market.py's RPC check, else RugCheck's risk names);
@@ -81,8 +100,17 @@ Vetoes (Tier 0-1 hard rejects with the data this arena has; thresholds below, al
   least BUNDLE_LIQ_USD of liquidity while under BUNDLE_MAX_AGE_MIN since migration (or, migration time unknown,
   pair age): a normal migration brings ~$12k to the PumpSwap pool, and all 19 buys of graduates showing >= $80k
   minutes after migration died within about an hour, the injected liquidity pulled (~$150k to ~$11k in a minute).
+  Bundle balances (run 9, video 1 check A): rugdata records each top holder's SOL balance (`sol`); when at least
+  BUNDLE_SOL_MATCH (4) of the top 5 holders (pool / LP / locker accounts excluded by rugdata, the creator and
+  IGNORE_HOLDERS left out, in holder order) each carry under BUNDLE_SOL_MAX (0.25) SOL and lie within
+  BUNDLE_SOL_SPREAD (0.05) SOL of each other, the coin is vetoed ("identical funding": one bundler topped every
+  wallet up with the same amount); BUNDLE_SOL_FLAG (3) such wallets is a soft flag. All 5 balances must be known
+  (a missing one means no veto and no flag, listed under unknowns). Video 1's check B, wallets funded in the same
+  time window, is NOT built: it needs about 20 signature lookups per token (each top holder's first funding
+  transaction), far more RPC than the free tier allows at 4 rug checks a tick.
 
-Settings: every number in THRESHOLDS can be overridden with ARENA_VETO_<KEY> (e.g. ARENA_VETO_TOP1_PCT=25);
+Settings: every number in THRESHOLDS can be overridden with ARENA_VETO_<KEY> (e.g. ARENA_VETO_TOP1_PCT=25,
+ARENA_VETO_BUNDLE_SOL_MAX=0.25, ARENA_VETO_BUNDLE_SOL_SPREAD=0.05, ARENA_VETO_RAMP_MIN_PCT=40);
 ARENA_VETO_IGNORE_HOLDERS is a comma-separated wallet list replacing the default; ARENA_VETO_BRAND_EXTRA is a
 comma-separated list of names added to BRAND_NAMES.
 """
@@ -149,6 +177,23 @@ _DEFAULTS = {
     # liquidity while its pool is younger than bundle_max_age_min minutes is vetoed (normal migration: ~$12k).
     "bundle_liq_usd": 60_000.0,
     "bundle_max_age_min": 180.0,
+    # Bundle balances (run 9, module docstring): of the top 5 holders, at least bundle_sol_match each under
+    # bundle_sol_max SOL and within bundle_sol_spread SOL of each other is a veto; bundle_sol_flag of them a flag.
+    "bundle_sol_max": 0.25,
+    "bundle_sol_spread": 0.05,
+    "bundle_sol_match": 4.0,
+    "bundle_sol_flag": 3.0,
+    # Ramp (run 9 replay of 798 run-8 curve coins: buying as the fill crossed 40-60% and selling at graduation or
+    # -30% was the only positive entry rule). The window, and the net buying a ramp_setup needs.
+    "ramp_min_pct": 40.0,
+    "ramp_max_pct": 80.0,
+    "ramp_min_net_share": 0.1,
+    "ramp_min_buyers": 10.0,
+    # Chart tell (run 9, video 1): a straight green run from the first tracked point, at least chart_min_points
+    # 30-second points long, ending at chart_min_mult x the first price; one dip of at most chart_wiggle_pct forgiven.
+    "chart_min_points": 8.0,
+    "chart_min_mult": 2.0,
+    "chart_wiggle_pct": 1.0,
 }
 
 
@@ -471,6 +516,65 @@ def _holders(rug):
     return top1, top10, ignored
 
 
+def holder_sols(rug):
+    """SOL balances of the top 5 holders (rugdata leaves pool / LP / locker / burn accounts out of top_holders), the
+    creator and IGNORE_HOLDERS left out, in holder order; None for a holder whose balance is unknown. Falls back to
+    rugdata's own top5_sol when the holder list carries no balances; [] without either."""
+    rug = rug if isinstance(rug, dict) else {}
+    th = [h for h in (rug.get("top_holders") if isinstance(rug.get("top_holders"), list) else []) if isinstance(h, dict)]
+    if any("sol" in h for h in th):
+        creator = rug.get("creator")
+        rows = [h for h in th if h.get("owner") not in IGNORE_HOLDERS and not h.get("creator")
+                and not (creator and h.get("owner") == creator)]
+        return [_num(h.get("sol")) for h in rows[:5]]
+    top5 = rug.get("top5_sol")
+    return [_num(x) for x in top5[:5]] if isinstance(top5, list) else []
+
+
+def _bundle_group(sols):
+    """The largest set of known balances that are all under BUNDLE_SOL_MAX and within BUNDLE_SOL_SPREAD of each other."""
+    th = THRESHOLDS
+    lows = sorted(s for s in sols if s is not None and s < th["bundle_sol_max"])
+    best, i = [], 0
+    for j in range(len(lows)):
+        while lows[j] - lows[i] >= th["bundle_sol_spread"]:
+            i += 1
+        if j - i + 1 > len(best):
+            best = lows[i:j + 1]
+    return best
+
+
+def curve_pace(curve_pct, chg):
+    """curve_pct_chg_10m from a chg_since entry (see the module docstring); None without a reference point."""
+    cs = chg or {}
+    pct, past = _num(curve_pct), _num(cs.get("curve_pct_10m"))
+    if pct is None or past is None:
+        return None
+    secs = cs.get("curve_pct_10m_secs") or 600
+    return round((pct - past) * 600 / min(600, max(105, secs)), 1)
+
+
+CHART_FLAG = "straight green run since launch, no pullback (bundle pattern)"
+
+
+def chart_tell(prices):
+    """{"green_run", "chart_tell"} from a 30-second price history [(ts, price), ...] (see the module docstring)."""
+    th = THRESHOLDS
+    ps = [p for p in (_num(x[1]) if isinstance(x, (tuple, list)) and len(x) > 1 else None for x in prices or ())
+          if p is not None and p > 0]
+    run, wiggled = 0, False
+    for a, b in zip(ps, ps[1:]):
+        if b >= a:
+            run += 1
+        elif not wiggled and b >= a * (1 - th["chart_wiggle_pct"] / 100):
+            wiggled = True
+            run += 1
+        else:
+            break
+    straight = len(ps) >= th["chart_min_points"] and run == len(ps) - 1 and ps[-1] >= ps[0] * th["chart_min_mult"]
+    return {"green_run": run, "chart_tell": "straight run" if straight else None}
+
+
 def _pump_pool(token, rug):
     dex = str(token.get("dex") or "").lower()
     mt = str(rug.get("main_market_type") or "").lower()
@@ -602,6 +706,17 @@ def veto_report(token, flow=None, now=None, creator_sold_usd=None, migrated_min_
             veto(f"creator still holds {cp:.0f}% of supply")
         elif cp >= th["creator_flag_pct"]:
             flags.append(f"creator holds {cp:.0f}%")
+        sols = holder_sols(rug)
+        if len(sols) >= 5:
+            if any(s is None for s in sols):
+                unknowns.append("top-holder SOL balances unknown")
+            else:
+                group = _bundle_group(sols)
+                mid = group[len(group) // 2] if group else 0.0
+                if len(group) >= th["bundle_sol_match"]:
+                    veto(f"bundle: top holders all carry ~{mid:.2f} SOL (identical funding)")
+                elif len(group) >= th["bundle_sol_flag"]:
+                    flags.append(f"{len(group)} of the top 5 holders carry ~{mid:.2f} SOL each (possible bundle)")
         checked = _num(rug.get("checked")) or _num(t.get("rug_checked"))
         if now is not None and checked and now - checked > th["rug_stale_h"] * 3600:
             unknowns.append(f"rug data {(now - checked) / 3600:.0f} h old")
@@ -663,7 +778,25 @@ def vetoes(token, flow=None, now=None, **kw):
 
 
 # ------------------------------------------------------------------------------------------------ LLM view
-def structural_view(token, flow, liq_trend, migrated_min_ago, creator_sold_usd, now=None):
+def ramp_stage(curve_pct):
+    """"early" / "ramp" / "late" for a curve fill (RAMP_MIN_PCT..RAMP_MAX_PCT is the ramp); None when unknown."""
+    pct = _num(curve_pct)
+    if pct is None:
+        return None
+    return "early" if pct < THRESHOLDS["ramp_min_pct"] else "late" if pct > THRESHOLDS["ramp_max_pct"] else "ramp"
+
+
+def _net_buying(token, flow):
+    """Net buying from many wallets, as ramp_setup needs it (see the module docstring)."""
+    th = THRESHOLDS
+    if flow:
+        return (flow.get("net_share") or 0.0) >= th["ramp_min_net_share"] and \
+            (flow.get("buyers") or 0) >= th["ramp_min_buyers"]
+    buys, sells = _num(token.get("buys_h1")), _num(token.get("sells_h1"))
+    return buys is not None and sells is not None and buys > sells and buys >= th["ramp_min_buyers"]
+
+
+def structural_view(token, flow, liq_trend, migrated_min_ago, creator_sold_usd, now=None, chg=None, prices=None):
     """Compact structural evidence for one candidate (only keys with data), for an LLM prompt."""
     t = token or {}
     out = {}
@@ -697,8 +830,22 @@ def structural_view(token, flow, liq_trend, migrated_min_ago, creator_sold_usd, 
     if liq_trend and liq_trend.get("vs_1h_pct") is not None:
         out["liquidity_vs_1h_pct"] = int(round(liq_trend["vs_1h_pct"]))
     rep = veto_report(t, flow, now, creator_sold_usd=creator_sold_usd, migrated_min_ago=mig)
-    if rep["flags"]:
-        out["flags"] = rep["flags"][:int(THRESHOLDS["max_view_flags"])]
+    flags = list(rep["flags"])
+    tell = chart_tell(prices)["chart_tell"] if prices else None
+    if tell:
+        out["chart_tell"] = tell
+        flags.insert(0, CHART_FLAG)
+    pump = t.get("pump") if isinstance(t.get("pump"), dict) else {}
+    pct = _num(pump.get("curve_pct"))
+    if pct is not None and not pump.get("graduated") and "pumpfun" in (str(t.get("dex") or "").lower(), t.get("source")):
+        out["curve_pct"] = round(pct, 1)
+        out["curve_pct_chg_10m"] = curve_pace(pct, chg)
+        out["ramp"] = ramp_stage(pct)
+        if out["ramp"] == "ramp" and not rep["vetoes"] and not tell and _net_buying(t, flow):
+            out["ramp_setup"] = True
+    if flags:
+        out["flags"] = flags[:int(THRESHOLDS["max_view_flags"])]
     if rep["vetoes"]:
         out["vetoes"] = rep["vetoes"]
     return out
+
