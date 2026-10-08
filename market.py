@@ -722,7 +722,7 @@ class LiveMarket:
         out = {"promoted": 0, "organic": 0, "both": 0}
         if PUMPFUN_SHARE > 0:
             out.update(graduated=0, pumpfun=0)
-        for t in self.tokens.values():
+        for t in list(self.tokens.values()):  # snapshot: track() runs on other threads
             if t.get("price", 0) > 0:
                 src = t.get("source") or "promoted"
                 out[src] = out.get(src, 0) + 1
@@ -751,7 +751,7 @@ class LiveMarket:
             free = {g: [] for g in GROUPS + ("both",)}
             count = {g: 0 for g in GROUPS}
             dead = []
-            for a, t in self.tokens.items():
+            for a, t in list(self.tokens.items()):  # snapshot: track() runs on other threads
                 g = SOURCE_GROUP.get(t.get("source") or "promoted", "promoted")
                 for side in (("organic", "promoted") if g == "both" else (g,)):
                     count[side] += 1
@@ -765,17 +765,17 @@ class LiveMarket:
                     dead.append(a)
             victim = None
             if dead:
-                victim = min(dead, key=lambda a: self.tokens[a].get("first_seen", 0))
+                victim = min(dead, key=lambda a: self.tokens.get(a, {}).get("first_seen", 0))
             else:
                 order = sorted(GROUPS, key=lambda g: quota[g] - count[g]) + ["both"]
                 for g in order:
                     if free[g]:
-                        victim = min(free[g], key=lambda a: (self.tokens[a].get("source") == "graduated",
-                                                             self.tokens[a].get("first_seen", 0)))
+                        victim = min(free[g], key=lambda a: (self.tokens.get(a, {}).get("source") == "graduated",
+                                                             self.tokens.get(a, {}).get("first_seen", 0)))
                         break
             if victim is None:
                 break
-            del self.tokens[victim]
+            self.tokens.pop(victim, None)
 
     def track(self, mint, source="copy", hold_secs=21600, held=()):
         """Force-track `mint` (e.g. a followed trader just bought it) so the next refresh prices it, and protect it
@@ -1100,11 +1100,13 @@ class LiveMarket:
         """Up to SELL_CHECKS probes per tick: never-probed tokens first, then the stalest."""
         if not JUP_ON or SELL_CHECKS <= 0:
             return
-        due = [t for t in self.tokens.values()
+        due = [t for t in list(self.tokens.values())  # snapshot: track() runs on other threads
                if t.get("price") and t.get("risk") is not None and plausible_mint(t.get("address"))
                and (not t.get("sellable") or now - t["sellable"].get("checked", 0) >= SELL_CHECK_SECS)]
         due.sort(key=lambda t: (t.get("sellable") or {}).get("checked", 0))
         for t in due[:SELL_CHECKS]:
+            if t["address"] not in self.tokens:  # evicted meanwhile
+                continue
             res = self._probe_sellability(t, now)
             if res:
                 self._set_sellable(t["address"], res)
@@ -1129,13 +1131,15 @@ class LiveMarket:
         among them), then the stalest. A None result is transient and retried later."""
         if rugdata is None or RUG_CHECKS <= 0:
             return
-        due = [t for t in self.tokens.values()
+        due = [t for t in list(self.tokens.values())  # snapshot: track() runs on other threads
                if t.get("price") and plausible_mint(t.get("address"))
                and (t.get("rug") is None or now - (t.get("rug_checked") or 0) >= RUG_CHECK_SECS)]
         due.sort(key=lambda t: (t.get("rug") is not None, (t.get("rug_tried") or 0) if t.get("rug") is None
                                 else (t.get("rug_checked") or 0)))
         for t in due[:RUG_CHECKS]:
             a = t["address"]
+            if a not in self.tokens:  # evicted meanwhile
+                continue
             t["rug_tried"] = now
             self.rug_stats["requests"] += 1
             try:
@@ -1196,7 +1200,9 @@ class LiveMarket:
         for a, t in best.items():
             self._merge_pair(a, t, now)
 
-        for a, t in self.tokens.items():
+        # Snapshots below: the wallet tracker calls track() from its own thread, which adds (and evicts) tokens
+        # while this runs; iterating the live dict raised "dictionary changed size during iteration".
+        for a, t in list(self.tokens.items()):
             c = self.risk_cache.get(a)
             if not c:
                 continue
@@ -1211,9 +1217,11 @@ class LiveMarket:
                 t["rug"], t["rug_checked"] = c["rug"], c.get("rug_checked", 0)
 
         checks = 0
-        for a, t in self.tokens.items():
+        for a, t in list(self.tokens.items()):
             if checks >= self.risk_checks:
                 break
+            if a not in self.tokens:  # evicted meanwhile
+                continue
             if t.get("price") and t.get("risk") is None:
                 info = self._check_risk(a)
                 if info:
@@ -1228,7 +1236,7 @@ class LiveMarket:
         self._check_sellability(now)
         self._check_rug(now)
 
-        for t in self.tokens.values():
+        for t in list(self.tokens.values()):
             if t.get("price"):
                 _annotate(t)
 
@@ -1239,7 +1247,7 @@ class LiveMarket:
         return t if t and t.get("price", 0) > 0 else None
 
     def candidates(self):
-        return [t for t in self.tokens.values() if t.get("price", 0) > 0 and t.get("liquidity", 0) > 0]
+        return [t for t in list(self.tokens.values()) if t.get("price", 0) > 0 and t.get("liquidity", 0) > 0]
 
     def ready(self):
         """True once most tracked tokens have their safety check done."""
@@ -1300,7 +1308,7 @@ class MockMarket:
     def refresh(self, held):
         rng = self.rng
         held = set(held)
-        for t in self.tokens.values():
+        for t in list(self.tokens.values()):  # snapshot: track() can run on another thread
             if t.get("_rugged"):
                 continue
             r = rng.gauss(t["_drift"], t["_vol"])
@@ -1321,11 +1329,11 @@ class MockMarket:
             _annotate(t)
         if rng.random() < 0.3:
             self._spawn()
-        dead = [a for a, t in self.tokens.items() if t.get("_rugged") and a not in held
+        dead = [a for a, t in list(self.tokens.items()) if t.get("_rugged") and a not in held
                 and (t.get("protect_until") or 0) < time.time()]
         if len(self.tokens) > 60:
             for a in dead[: len(self.tokens) - 60]:
-                del self.tokens[a]
+                self.tokens.pop(a, None)
         self.sol["price"] *= math.exp(rng.gauss(0, 0.002))
 
     def get(self, addr):

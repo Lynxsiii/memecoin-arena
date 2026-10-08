@@ -59,6 +59,10 @@ What the arena does for you:
 - Moonshots, lives, points and the strategy room are described below.
 
 Playbook (what the data means; you decide what to do with it):
+- Rugs that look strong: last night every brand-name coin (ChatGPT, Apple, NVIDIA, Tesla, Nike...) and every fresh
+  graduate carrying $80k+ of liquidity died within an hour; a real migration brings about $12k, so a huge pool minutes
+  after graduation is injected liquidity waiting to be pulled. The arena now vetoes both. Treat a famous name or an
+  oversized pool as the rug tell, not as strength.
 - Flow: real demand is net money coming in from many wallets while the price holds; sells catching up while the price
   stalls is distribution and often precedes a drop.
 - Liquidity vs mcap: thin liquidity relative to market cap means a few sellers move the price a lot and your own exit has

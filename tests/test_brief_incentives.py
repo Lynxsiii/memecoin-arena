@@ -6,6 +6,7 @@ def test_brief_incentives():
     assert "scores 0 and sits at the bottom" in b
     assert "base rate, not a veto" in b
     assert "cash earns nothing" in b
+    assert "injected liquidity" in b
 
 
 def test_risk_personas_buy_when_flat():

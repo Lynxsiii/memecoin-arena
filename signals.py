@@ -75,9 +75,16 @@ Vetoes (Tier 0-1 hard rejects with the data this arena has; thresholds below, al
   inference, not documentation) as pump.fun's Mayhem-mode agent: a System-owned wallet with ~59,600 SOL holding
   46-75% of 31 tracked pump.fun tokens, one of them flagged Mayhem by PumpPortal (Mayhem launches mint a second
   billion tokens to the agent). Churn volume is a flag, never a veto.
+  Two rug signatures measured on the arena's own buys (run 8, 2026-10-07/08: 65 Claude buys, 30 dead):
+  brand-name impersonation, a symbol or name that is a famous brand (BRAND_NAMES: ChatGPT, Apple, NVIDIA, Tesla,
+  Nike, ...; all 18 such buys died, against 26% of the rest); and bundle liquidity, a pump.fun graduate showing at
+  least BUNDLE_LIQ_USD of liquidity while under BUNDLE_MAX_AGE_MIN since migration (or, migration time unknown,
+  pair age): a normal migration brings ~$12k to the PumpSwap pool, and all 19 buys of graduates showing >= $80k
+  minutes after migration died within about an hour, the injected liquidity pulled (~$150k to ~$11k in a minute).
 
 Settings: every number in THRESHOLDS can be overridden with ARENA_VETO_<KEY> (e.g. ARENA_VETO_TOP1_PCT=25);
-ARENA_VETO_IGNORE_HOLDERS is a comma-separated wallet list replacing the default.
+ARENA_VETO_IGNORE_HOLDERS is a comma-separated wallet list replacing the default; ARENA_VETO_BRAND_EXTRA is a
+comma-separated list of names added to BRAND_NAMES.
 """
 import contextlib
 import os
@@ -138,6 +145,10 @@ _DEFAULTS = {
     # Rug data older than this many hours is still used (stale beats blind) but listed under unknowns.
     "rug_stale_h": 6.0,
     "max_view_flags": 4.0,
+    # Bundle liquidity (run 8 measurement, module docstring): a pump.fun graduate showing at least this much
+    # liquidity while its pool is younger than bundle_max_age_min minutes is vetoed (normal migration: ~$12k).
+    "bundle_liq_usd": 60_000.0,
+    "bundle_max_age_min": 180.0,
 }
 
 
@@ -161,6 +172,25 @@ IGNORE_HOLDERS = ({w.strip(): "protocol wallet" for w in _ign.split(",") if w.st
                   else dict(_DEFAULT_IGNORE))
 
 PUMP_DEXES = {"pumpfun", "pumpswap"}
+# Brand-name impersonation (run 8 measurement, module docstring): lowercase, letters and digits only. A symbol or
+# name matches when, cleaned the same way, it equals a brand or is a brand followed by one of _BRAND_SUFFIXES or
+# by digits only ("apple2", "nikecoin", "teslaai"); a brand inside a longer word ("metamorph", "solcat") does not.
+BRAND_NAMES = frozenset({
+    "chatgpt", "openai", "gpt", "claude", "anthropic", "gemini", "grok", "xai", "apple", "google", "alphabet",
+    "microsoft", "nvidia", "amazon", "meta", "facebook", "instagram", "whatsapp", "tesla", "spacex", "starlink",
+    "neuralink", "nike", "adidas", "lego", "disney", "netflix", "youtube", "tiktok", "reddit", "twitter", "bbc",
+    "cnn", "coinbase", "binance", "robinhood", "visa", "mastercard", "paypal", "mcdonalds", "starbucks", "cocacola",
+    "coke", "pepsi", "walmart", "costco", "ferrari", "porsche", "toyota", "ford", "boeing", "nasa", "pokemon",
+    "nintendo", "playstation", "xbox", "marvel", "pixar", "samsung", "intel", "amd", "oracle", "ibm", "uber",
+    "airbnb", "spotify", "shopify", "stripe", "bitcoin", "ethereum", "solana", "pumpfun", "dexscreener", "jupiter",
+    "phantom",
+} | {re.sub(r"[^a-z0-9]", "", b.lower()) for b in os.environ.get("ARENA_VETO_BRAND_EXTRA", "").split(",")} - {""})
+_BRAND_SUFFIXES = {"coin", "inu", "ai", "2", "3", "x", "fun", "sol"}
+_BRAND_DISPLAY = {"chatgpt": "ChatGPT", "openai": "OpenAI", "gpt": "GPT", "xai": "xAI", "nvidia": "NVIDIA",
+                  "spacex": "SpaceX", "tiktok": "TikTok", "youtube": "YouTube", "whatsapp": "WhatsApp", "bbc": "BBC",
+                  "cnn": "CNN", "lego": "LEGO", "nasa": "NASA", "amd": "AMD", "ibm": "IBM", "paypal": "PayPal",
+                  "playstation": "PlayStation", "mcdonalds": "McDonald's", "cocacola": "Coca-Cola",
+                  "pumpfun": "pump.fun", "dexscreener": "DEX Screener"}
 # Honeypot-type Token-2022 extensions as RugCheck's risk names say them (fallback for rug data from before
 # rugdata.py parsed token_extensions).
 _EXT_RISKS = (("permanent delegate", re.compile(r"permanent (delegate|control)", re.I)),
@@ -452,6 +482,23 @@ def _fee(rug):
     return max(fees) if fees else None
 
 
+def brand_match(token):
+    """The brand a token's symbol or name impersonates (as written in BRAND_NAMES), or None. See BRAND_NAMES."""
+    t = token or {}
+    for field in ("symbol", "name"):
+        s = re.sub(r"[^a-z0-9]", "", str(t.get(field) or "").lower())
+        if not s:
+            continue
+        if s in BRAND_NAMES:
+            return s
+        # longest brand first, so "chatgpt2" names chatgpt rather than nothing via "chat"
+        for b in sorted((b for b in BRAND_NAMES if s.startswith(b)), key=len, reverse=True):
+            rest = s[len(b):]
+            if rest in _BRAND_SUFFIXES or rest.isdigit():
+                return b
+    return None
+
+
 def veto_report(token, flow=None, now=None, creator_sold_usd=None, migrated_min_ago=None):
     """{"vetoes": [...], "flags": [...], "unknowns": [...]} for one token dict (see the module docstring)."""
     th = THRESHOLDS
@@ -563,6 +610,21 @@ def veto_report(token, flow=None, now=None, creator_sold_usd=None, migrated_min_
     else:
         unknowns.append("no rug data yet (holders, insiders, creator, LP, extensions unknown)")
 
+    # --- rug signatures measured on the arena's own buys (module docstring)
+    brand = brand_match(t)
+    if brand:
+        veto(f"brand-name impersonation ({_BRAND_DISPLAY.get(brand, brand.capitalize())}): every such coin bought "
+             f"so far was rugged")
+    mig = migrated_min_ago if migrated_min_ago is not None else minutes_since_graduation(t, now)
+    age_min = _num(t.get("age_min"))
+    liq = _num(t.get("liquidity"))
+    graduate = bool((t.get("pump") or {}).get("graduated")) or str(t.get("dex") or "").lower() == "pumpswap"
+    pool_min = mig if mig is not None else age_min
+    if graduate and liq is not None and pool_min is not None and pool_min < th["bundle_max_age_min"] \
+            and liq >= th["bundle_liq_usd"]:
+        veto(f"liquidity ${liq / 1000:.0f}k on a {pool_min:.0f}-minute-old graduate: far above a normal migration "
+             f"(~$12k), injected liquidity gets pulled")
+
     # --- Tier 2: volume quality (flags only)
     if flow:
         rt, net = flow.get("round_trip_share") or 0.0, flow.get("net_share") or 0.0
@@ -587,8 +649,6 @@ def veto_report(token, flow=None, now=None, creator_sold_usd=None, migrated_min_
         flags.append(f"creator sold ${creator_sold_usd:,.0f}")
 
     # --- timing (flags only)
-    mig = migrated_min_ago if migrated_min_ago is not None else minutes_since_graduation(t, now)
-    age_min = _num(t.get("age_min"))
     if (mig is not None and mig * 60 < th["sniper_window_secs"]) or \
             (age_min is not None and age_min * 60 < th["sniper_window_secs"]):
         flags.append("inside the first minute (sniper exit window)")
