@@ -10,6 +10,11 @@ formula: it already contains the pool's own fee and real price impact across the
 trade also pays FEE (the app/bot fee a Telegram or web trading bot charges, 1% by default) and a fixed network
 priority fee in dollars; a failed transaction still pays the network fee, as on Solana.
 
+Quote sanity (QUOTE_SANITY = 3): a router quote implying a price more than 3x away from spot, either way, is
+distrusted as a decimals bug or stale feed and the formula is used instead. The one exception is a SELL quote far BELOW
+spot (under 1/3): that is a pool that has been rugged or drained while spot was stale, the router's number is the truth,
+and the paper fill pays it (a sell quote far ABOVE spot, and any buy quote far off spot, are still rejected).
+
 Friction settings (environment variables, read once at import; the defaults are on):
   ARENA_ROUTE=bot             how you'd trade live, so the results transfer:
                                 bot     a Telegram/web trading bot (Axiom, Photon, GMGN): 1% app fee + $0.25 network
@@ -44,6 +49,7 @@ under $5, 2% from $5 to $47.50, a flat $0.95 from $47.50 to $190, and 0.5% from 
 """
 import math
 import os
+import time
 
 
 def _env(name, default):
@@ -71,7 +77,10 @@ FAIL_PUMP_CHG = _env("ARENA_FAIL_PUMP_CHG", 50)
 MEV_MAX_PCT = max(0.0, _env("ARENA_MEV_MAX_PCT", _R[3]))
 MEV_MIN_PCT = max(0.0, min(_env("ARENA_MEV_MIN_PCT", 0.5), MEV_MAX_PCT))
 MEV_CHG = _env("ARENA_MEV_CHG", 10)
-QUOTE_SANITY = 3.0  # a router quote implying a price more than 3x away from spot is distrusted (decimals bug, stale feed)
+QUOTE_SANITY = 3.0  # a router quote implying a price more than 3x away from spot is distrusted (decimals bug, stale feed),
+#                     except a SELL quote far BELOW spot: that is a drained pool (a rug) and the fill must reflect it
+_LOW_NOTE_SECS = 30.0  # the "pool drained" line is printed at most this often per process
+_low_note_at = -1e9
 
 
 # Fomo's size tiers: (order below $, ("flat", dollars) or ("pct", fraction)). Ignored when ARENA_FEE or
@@ -160,9 +169,11 @@ def mev_slippage(token, usd):
     return (MEV_MIN_PCT + (MEV_MAX_PCT - MEV_MIN_PCT) * (0.6 * pump + 0.4 * size)) / 100.0
 
 
-def _quoted(quote, amount, expect, ratio_fn):
+def _quoted(quote, amount, expect, ratio_fn, low_ok=False):
     """Run a router quote callable safely. Returns its result only if it is positive and within QUOTE_SANITY of
-    what the spot price implies (ratio_fn(result) is the implied/spot ratio); None otherwise."""
+    what the spot price implies (ratio_fn(result) is the implied/spot ratio); None otherwise. With `low_ok` (sells)
+    a quote far BELOW spot is accepted: the pool is gone and spot is stale, so the router's value is the truth."""
+    global _low_note_at
     if quote is None or amount <= 0:
         return None
     try:
@@ -173,6 +184,12 @@ def _quoted(quote, amount, expect, ratio_fn):
     if not out or out <= 0 or not expect:
         return None
     r = ratio_fn(out)
+    if r > 0 and r < 1 / QUOTE_SANITY and low_ok:
+        now = time.monotonic()
+        if now - _low_note_at >= _LOW_NOTE_SECS:
+            _low_note_at = now
+            print(f"[exchange] router values the sell at {r:.2f}x spot: pool drained, filling at the router's value")
+        return out
     if r <= 0 or r > QUOTE_SANITY or r < 1 / QUOTE_SANITY:
         print(f"[exchange] router quote {r:.2f}x away from spot, distrusting it and using the AMM formula")
         return None
@@ -206,7 +223,7 @@ def sell_fill(token, qty, quote=None):
     if price <= 0 or qty <= 0:
         return 0.0, 0.0
     v = qty * price
-    gross = _quoted(quote, qty, price, lambda g: g / v)
+    gross = _quoted(quote, qty, price, lambda g: g / v, low_ok=True)
     if gross is None:
         if x <= 0:
             return 0.0, 0.0

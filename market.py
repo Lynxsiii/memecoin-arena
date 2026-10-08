@@ -69,7 +69,8 @@ Discovery (where tracked tokens come from; every token carries `source` and `fir
                                 pools/multi prices it; the token carries price_source "gecko"). Pools are cached
                                 for 10 minutes +-20% (so graduations are picked up), "no pool" answers for 2
                                 minutes; a token Gecko-priced under 20 s ago is reused, not re-fetched (the fast
-                                exit checks run every 10 s). SOL is priced first, then held tokens, then the rest.
+                                exit checks run every 10 s), except a HELD token, which is always re-fetched (a
+                                pre-rug price must never fill a sell). SOL is priced first, then held tokens, then the rest.
                                 Never raises; skipped while a GeckoTerminal 429 back-off is running. The
                                 "priced M via GeckoTerminal" log line is printed at most every 30 s.
   ARENA_GECKO_FALLBACK_CALLS=10 max GeckoTerminal requests per price fetch for the fallback. Budget: with 150
@@ -842,7 +843,8 @@ class LiveMarket:
         as soon as 30 cached pools are waiting (or on the last request), so even a cold cache prices tokens on the
         first call. Order: SOL first (curve liquidity needs it), then held tokens, then the rest. A token whose
         current dict was Gecko-priced under GECKO_FRESH_SECS ago is returned as is (no request: the fast exit path
-        runs every 10 s and GeckoTerminal does not update that fast). When the minute budget runs out the rest is
+        runs every 10 s and GeckoTerminal does not update that fast), EXCEPT a mint in self.last_held: held tokens are
+        few and a cached pre-rug price would fill their sell, so they are always re-fetched. When the minute budget runs out the rest is
         skipped for this call. Returns {mint: token dict} (see parse_gecko_pool). May raise: _fetch_pairs catches."""
         now = time.time()
         for a in [a for a, until in self.pool_until.items() if until <= now]:
@@ -852,15 +854,15 @@ class LiveMarket:
         stats = self.gecko_fallback_stats
         stats["tokens"] += len(missing)
         out, order = {}, []
+        held = self.last_held
         for a in dict.fromkeys(missing):
             cur = self.sol if a == SOL_MINT else self.tokens.get(a)
-            if (isinstance(cur, dict) and cur.get("price_source") == "gecko" and (cur.get("price") or 0) > 0
+            if (a not in held and isinstance(cur, dict) and cur.get("price_source") == "gecko" and (cur.get("price") or 0) > 0
                     and now - (cur.get("updated") or 0) < GECKO_FRESH_SECS):
                 out[a] = dict(cur)
                 stats["reused"] += 1
             else:
                 order.append(a)
-        held = self.last_held
         order.sort(key=lambda a: (a != SOL_MINT, a not in held))  # stable: SOL, held, then the rest in order
         lookup = [a for a in order if a not in self.pool_until]
         ready = [a for a in order if a in self.pool_of]

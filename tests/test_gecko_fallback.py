@@ -262,3 +262,21 @@ def test_fallback_log_line_throttled(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert out.count("via GeckoTerminal") == 1
     assert m.gecko_fallback_stats["priced"] == 6
+
+
+def test_held_mint_is_never_reused_from_cache(monkeypatch):
+    """A held token Gecko-priced 5 s ago is re-fetched (a pre-rug price must not fill its sell); an unheld one is reused."""
+    tokens, pools = _two_mint_feed()
+    m, calls = _market(monkeypatch, tokens, pools)
+    now = market.time.time()
+    for a, t in m._fetch_pairs([MINT_A, MINT_B]).items():
+        m._merge_pair(a, t, now)
+    for a in (MINT_A, MINT_B):
+        m.tokens[a]["updated"] = now - 5
+    m.last_held = {MINT_A}
+    calls.clear()
+    best = m._fetch_pairs([MINT_A, MINT_B])
+    assert len(calls) == 1 and calls[0].startswith("/networks/solana/pools/multi/")
+    assert POOL_A in calls[0] and POOL_B not in calls[0]
+    assert set(best) == {MINT_A, MINT_B}
+    assert m.gecko_fallback_stats["reused"] == 1  # only the unheld MINT_B
