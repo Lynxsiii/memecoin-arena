@@ -135,6 +135,15 @@ def test_sell_at_graduation_fires_on_graduation_only(arena_llm):
     assert sells[0][1]["reason"] == "ramp: graduated, cashing the curve"
 
 
+def test_no_same_tick_graduation_sell_on_a_graduated_fill(arena_llm):
+    a, name, now, t = _curve_arena(arena_llm)
+    t["pump"] = {"curve_pct": 100.0, "graduated": now - 5}   # migrated, dex not updated yet
+    a.execute(name, {"action": "buy", "token": "T1pump", "usd": 100, "reason": "late", "sell_at_graduation": True}, now)
+    assert a.accounts[name]["positions"]["T1pump"]["entry_dex"] is None
+    a.check_managed(now)
+    assert not any("graduated" in o["reason"] for _, o in _sells(a))
+
+
 def test_no_graduation_sell_without_the_flag(arena_llm):
     a, name, now, t = _curve_arena(arena_llm)
     a.execute(name, {"action": "buy", "token": "T1pump", "usd": 100, "reason": "plain"}, now)
@@ -200,16 +209,42 @@ class _Resp:
 
 
 class _Session:
-    def __init__(self, lamports):
-        self.lamports, self.calls = lamports, []
+    def __init__(self, lamports, programs=()):
+        self.lamports, self.calls, self.timeouts, self.programs = lamports, [], [], set(programs)
 
     def post(self, url, json=None, timeout=None):
         self.calls.append(json)
+        self.timeouts.append(timeout)
         owners = json["params"][0]
         return _Resp({"jsonrpc": "2.0", "id": json.get("id"),
                       "result": {"value": [None if self.lamports.get(o) is None else
-                                           {"lamports": self.lamports[o], "owner": rugdata.SYSTEM_PROGRAM}
+                                           {"lamports": self.lamports[o],
+                                            "owner": "PDAprogram111" if o in self.programs else rugdata.SYSTEM_PROGRAM}
                                            for o in owners]}})
+
+
+def test_rugdata_skips_program_owned_holders_and_still_vetoes(monkeypatch):
+    monkeypatch.setattr(rugdata, "_sol_paused_until", 0.0)
+    owners = ["PDA", "A", "B", "C", "D", "E"]
+    info = {"creator": None, "top_holders": [{"pct": 6.0 - i, "owner": o, "insider": False, "creator": False}
+                                             for i, o in enumerate(owners)]}
+    s = _Session({"PDA": 2_039_280, "A": 100_000_000, "B": 110_000_000, "C": 100_000_000, "D": 120_000_000,
+                  "E": 9_000_000_000}, programs={"PDA"})
+    rugdata._holder_balances(s, info, {"requests": 0})
+    assert s.timeouts == [2.0]
+    pda = info["top_holders"][0]
+    assert pda.get("program_owned") is True and "sol" not in pda and info["sol_skipped"] == 1
+    assert info["top5_sol"] == [0.1, 0.11, 0.1, 0.12, 9.0]
+    rep = veto_report({"symbol": "FROG", "rug": {**info, "top1_pct": 6.0, "top10_pct": 20.0, "checked": _NOW,
+                                                "error": None}}, now=_NOW)
+    assert _bundle(rep) == ["bundle: top holders all carry ~0.11 SOL (identical funding)"]
+    # program-owned owners all carrying the same rent-exempt minimum are not a bundle
+    rents = {"creator": None, "top_holders": [{"pct": 5.0 - i, "owner": f"P{i}", "insider": False, "creator": False}
+                                              for i in range(5)]}
+    rugdata._holder_balances(_Session({f"P{i}": 2_039_280 for i in range(5)}, programs={f"P{i}" for i in range(5)}),
+                             rents, {"requests": 0})
+    assert rents["sol_skipped"] == 5 and rents["top5_sol"] is None
+    assert not _bundle(veto_report({"symbol": "FROG", "rug": {**rents, "checked": _NOW, "error": None}}, now=_NOW))
 
 
 def test_rugdata_records_holder_sol(monkeypatch):

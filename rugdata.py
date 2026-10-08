@@ -59,14 +59,19 @@ Creator and Token-2022 extensions (read by signals.py; flags() does not use them
 
 Holder SOL balances (run 9, for signals.py's bundle-balance veto):
   top_holders[i]["sol"]  the holder's OWNER wallet SOL balance (lamports / 1e9; a wallet the chain has no account for
-                         is 0.0), from one getMultipleAccounts on the owners (base64, no data). The RPC holder path
+                         is 0.0), from one getMultipleAccounts on the owners (base64, no data, SOL_TIMEOUT = 2 s).
+                         Only System-Program-owned wallets (or missing accounts) get a balance: a program-owned owner
+                         (PDA, vault) carries the same rent-exempt minimum as every other and would look like
+                         identical funding, so it is marked `program_owned` and left out of the bundle check
+                         (`sol_skipped` counts them). The RPC holder path
                          already makes that call for its PDA check and records the balances from it; otherwise one
                          extra request per assess() goes to RUG_RPC_URL (getMultipleAccounts works on the public
                          endpoint). A failure leaves `sol` out (unknown, never a veto) and pauses the lookup for
                          SOL_PAUSE_SECS (60) so a dead RPC costs at most one timeout a minute. RUG_HOLDER_SOL=0 turns
                          it off.
   top5_sol               the balances of the top 5 holders in holder order, pool / LP / locker / burn accounts
-                         (already out of top_holders) and the creator left out; None for an unknown balance.
+                         (already out of top_holders), program-owned owners and the creator left out; None for an
+                         unknown balance.
 
 LP lock (lp_locked_pct): liquidity-weighted average of lp.lpLockedPct over markets that have LP tokens
   (lp.lpTotalSupply > 0). pump.fun bonding curves and PumpSwap pools report 100 (LP burned), classic Raydium pools
@@ -123,6 +128,7 @@ RPC_HOLDERS = os.environ.get("RUG_RPC_HOLDERS", "auto").strip().lower()
 RPC_PAUSE_SECS = 600
 HOLDER_SOL = os.environ.get("RUG_HOLDER_SOL", "1").strip().lower() not in ("0", "off", "false", "no")
 SOL_PAUSE_SECS = 60
+SOL_TIMEOUT = 2.0   # seconds for the balance lookup: a slow public RPC must not add 4 x 5 s to a tick
 LAMPORTS = 1_000_000_000
 
 
@@ -415,11 +421,11 @@ def _parse_rugcheck(d, info):
 
 
 # ----------------------------------------------------------------------------------------------- Solana RPC
-def _rpc(session, body, cost):
+def _rpc(session, body, cost, timeout=None):
     global _rpc_paused_until
     cost["requests"] += 1
     try:
-        r = session.post(RPC_URL, json=body, timeout=TIMEOUT)
+        r = session.post(RPC_URL, json=body, timeout=min(TIMEOUT, timeout or TIMEOUT))
     except Exception as e:
         raise _Transient(f"rpc: {type(e).__name__}")
     if r.status_code == 429 or r.status_code >= 500:
@@ -509,12 +515,19 @@ def _holder_balances(session, info, cost):
         try:
             res = _rpc(session, {"jsonrpc": "2.0", "id": 5, "method": "getMultipleAccounts",
                                  "params": [need, {"encoding": "base64", "dataSlice": {"offset": 0, "length": 0}}]},
-                       cost)[0]
+                       cost, timeout=SOL_TIMEOUT)[0]
             values = (res.get("result") or {}).get("value")
             if isinstance(values, list) and len(values) == len(need):
-                bal = {o: _sol(v) for o, v in zip(need, values)}
+                bal, prog = {}, set()
+                for o, v in zip(need, values):
+                    if isinstance(v, dict) and v.get("owner") not in (None, SYSTEM_PROGRAM):
+                        prog.add(o)  # a program-owned account (PDA, vault): rent-exempt minimum, not a funded wallet
+                    else:
+                        bal[o] = _sol(v)  # a System-owned wallet, or no account at all (0 SOL)
                 for h in holders:
-                    if h.get("owner") in bal and bal[h["owner"]] is not None:
+                    if h.get("owner") in prog:
+                        h["program_owned"] = True
+                    elif h.get("owner") in bal and bal[h["owner"]] is not None:
                         h["sol"] = bal[h["owner"]]
             else:
                 _sol_paused_until = time.time() + SOL_PAUSE_SECS
@@ -522,9 +535,11 @@ def _holder_balances(session, info, cost):
             _sol_paused_until = time.time() + SOL_PAUSE_SECS
     if holders:
         creator = info.get("creator")
-        rest = [h for h in holders if not h.get("creator") and not (creator and h.get("owner") == creator)]
+        rest = [h for h in holders if not h.get("creator") and not h.get("program_owned")
+                and not (creator and h.get("owner") == creator)]
         top5 = [h.get("sol") for h in rest[:5]]
         info["top5_sol"] = top5 if any(s is not None for s in top5) else None
+        info["sol_skipped"] = sum(1 for h in holders if h.get("program_owned"))
 
 
 # ----------------------------------------------------------------------------------------------- public API

@@ -1085,7 +1085,9 @@ class Arena:
                 pos["moonshot"] = True
             if o.get("following"):
                 pos["copied_wallet"] = o["following"]  # the shadow's leader-sell exit watches this wallet
-            pos.setdefault("entry_dex", str(t.get("dex") or "").lower() or None)
+            dex = str(t.get("dex") or "").lower()
+            # a fill on a coin that already graduated is not a curve entry: no sell-at-graduation on the same tick
+            pos.setdefault("entry_dex", None if (t.get("pump") or {}).get("graduated") or dex == "pumpswap" else dex or None)
             if o.get("sell_at_graduation") in (True, "true", "True"):
                 pos["sell_at_graduation"] = True  # check_managed sells it all when the coin graduates
             pos["cost_in"] = pos.get("cost_in", pos["cost"]) + usd  # everything ever put in (for the runner bonus)
@@ -1304,7 +1306,7 @@ class Arena:
     def save_decisions(self, name, agent):
         while agent.log:
             d = agent.log.popleft()
-            keys = ("action", "symbol", "usd", "fraction", "reason", "rejected", "moonshot") + EXIT_FIELDS
+            keys = ("action", "symbol", "usd", "fraction", "reason", "rejected", "moonshot", "sell_at_graduation") + EXIT_FIELDS
             orders = [{k: o.get(k) for k in keys if k in o} for o in d["orders"]
                       if isinstance(o, dict) and o.get("action") != "exits"]
             exits = [{k: o.get(k) for k in ("symbol", "rejected") + EXIT_FIELDS if k in o} for o in d["orders"]

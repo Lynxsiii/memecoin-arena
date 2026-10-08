@@ -518,14 +518,15 @@ def _holders(rug):
 
 def holder_sols(rug):
     """SOL balances of the top 5 holders (rugdata leaves pool / LP / locker / burn accounts out of top_holders), the
-    creator and IGNORE_HOLDERS left out, in holder order; None for a holder whose balance is unknown. Falls back to
+    creator, program-owned owners (rugdata `program_owned`: rent-exempt PDAs, not wallets) and IGNORE_HOLDERS left
+    out, in holder order; None for a holder whose balance is unknown. Falls back to
     rugdata's own top5_sol when the holder list carries no balances; [] without either."""
     rug = rug if isinstance(rug, dict) else {}
     th = [h for h in (rug.get("top_holders") if isinstance(rug.get("top_holders"), list) else []) if isinstance(h, dict)]
     if any("sol" in h for h in th):
         creator = rug.get("creator")
         rows = [h for h in th if h.get("owner") not in IGNORE_HOLDERS and not h.get("creator")
-                and not (creator and h.get("owner") == creator)]
+                and not h.get("program_owned") and not (creator and h.get("owner") == creator)]
         return [_num(h.get("sol")) for h in rows[:5]]
     top5 = rug.get("top5_sol")
     return [_num(x) for x in top5[:5]] if isinstance(top5, list) else []

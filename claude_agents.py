@@ -48,7 +48,8 @@ What the research says about this market (2024-2026 studies of pump.fun and Sola
 
 What the arena does for you:
 - Vetoes: coins that fail hard safety checks (mint or freeze authority not revoked, honeypot signs, dangerous token
-  extensions, unlocked liquidity, creator with a rug history, insiders or a few wallets holding too much supply) are left
+  extensions, unlocked liquidity, creator with a rug history, insiders or a few wallets holding too much supply, top
+  holders all carrying the same tiny SOL balance: one bundler funding every wallet) are left
   out of your candidates, and a buy of one is refused. vetoed_count says how many were left out this look.
 - Structure: each candidate carries "structure", the signals above measured from the pool's recent trades and holders:
   net_inflow_1h_usd, net_share (net buying as a share of all volume, -1 to 1), buyers_1h, round_trip_share (volume from
@@ -64,7 +65,7 @@ What the arena does for you:
 
 Playbook (what the data means; you decide what to do with it):
 - Ramp: on the run-8 recordings the only entry that paid was buying a curve coin as its
-  fill crossed 40-60% with net buying from many wallets and selling at graduation or a -30% stop; coins that reach
+  fill crossed 40-80% with net buying from many wallets and selling at graduation or a -30% stop; coins that reach
   half the curve graduate about half the time, and the curve's own math lifts the price into graduation. Dip-buys,
   chasing fast fills and buying at first sight all lost after costs. ramp_setup marks coins in that window.
 - Rugs that look strong: last night every brand-name coin (ChatGPT, Apple, NVIDIA, Tesla, Nike...) and every fresh
@@ -84,7 +85,7 @@ Playbook (what the data means; you decide what to do with it):
   runner inside a bucket, not the bucket's average.
 - Stops: decide where you're wrong before you buy, and keep stops wider than the token's noise; in earlier runs the
   Claudes' tight trailing stops and stop losses lost far more money than the exits they chose themselves.
-- Don't average down on a token losing liquidity or turning red, and don't buy back a token you just sold unless
+- Never average down: a coin under your entry is a coin to leave. Don't buy back a token you just sold unless
   something has really changed (your_past_trades).
 - Your earlier decisions (your_previous_note, recent_closed, your_journal) are context to learn from, not rules to obey.
 
