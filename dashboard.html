@@ -498,7 +498,7 @@
     <div class="overview">
       <section>
         <h2>Standings</h2>
-        <p class="sub">Ranked by real profit, the number that matters for live money. Claudes also show their game points (points = your best single life as % of the stake, plus runner bonuses; lives come back one per hour). Click anyone for their profile.</p>
+        <p class="sub">Ranked by real profit, the number that matters for live money. Claudes also show their game points (points = the best your best life ever reached (its peak) as % of the stake, plus runner bonuses; lives come back one per hour). Click anyone for their profile.</p>
         <div class="panel" id="mini-board"></div>
         <button type="button" class="more" data-goto="agents">Full table, open positions and head to head</button>
       </section>
@@ -1123,7 +1123,7 @@ function renderMiniBoard() {
     return `
     <div class="mini-row${out ? " out" : ""}" data-agent="${esc(a.name)}" style="--c:${colorOf(a)}" tabindex="0" role="button" aria-label="${esc(a.name)}, ${ordinal(i + 1)}, ${pct(a.pnl_pct)}${lives ? ", " + lives : ""}. Open profile">
       <span class="rk">${ordinal(i + 1)}</span>${avatar(a.name)}
-      <span class="nm"><b>${esc(a.name)}${heartsHTML(a)}</b><small>${teamName(teamOf(a))}${typeof a.lives === "number" && typeof a.points === "number" ? ` · <span class="${a.points >= 0 ? "pos" : "neg"}" title="Game points: your best single life as % of the stake, plus runner bonuses; lives come back one per hour">${a.points >= 0 ? "+" : ""}${a.points.toFixed(1)} pts</span>` : ""} · ${out ? `<span class="neg">Out</span>` : a.positions.length ? `${a.positions.length} open` : "all cash"} · ${a.trades} trade${a.trades === 1 ? "" : "s"}</small></span>
+      <span class="nm"><b>${esc(a.name)}${heartsHTML(a)}</b><small>${teamName(teamOf(a))}${typeof a.lives === "number" && typeof a.points === "number" ? ` · <span class="${a.points >= 0 ? "pos" : "neg"}" title="Game points: the best your best life ever reached (its peak) as % of the stake, plus runner bonuses; lives come back one per hour">${a.points >= 0 ? "+" : ""}${a.points.toFixed(1)} pts</span>` : ""} · ${out ? `<span class="neg">Out</span>` : a.positions.length ? `${a.positions.length} open` : "all cash"} · ${a.trades} trade${a.trades === 1 ? "" : "s"}</small></span>
       <span class="eq">${money(a.equity, 0)}</span><span class="pc ${a.pnl_pct >= 0 ? "pos" : "neg"}">${pct(a.pnl_pct)}</span></div>`;
   }).join(""));
 }

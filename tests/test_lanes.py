@@ -197,3 +197,19 @@ def test_watcher_records_wake_tokens(arena_llm):
     a.check_watch(view["now"])
     hit = {t["address"] for t in a.market.candidates()}
     assert agent.wake_tokens and agent.wake_tokens <= hit
+
+
+def test_watcher_skips_vetoed_coins(arena_llm):
+    a, name, view = arena_llm()
+    agent = a.agents[name]
+    agent.wake_tokens, agent.watch_seen, woke = set(), {}, []
+    agent.wake = woke.append
+    agent.watch_rule = lambda: {"min_chg_5m": -1000, "max_chg_5m": 1000, "min_vol_1h": 0, "min_liquidity": 0,
+                                "min_age_min": 0, "ratings": ["green", "yellow", "red", None]}
+    addrs = [t["address"] for t in a.market.candidates()]
+    a.vetoes = {x: ["rug"] for x in addrs}
+    a.check_watch(view["now"])
+    assert woke == [] and agent.wake_tokens == set() and agent.watch_seen == {}
+    a.vetoes = {x: ["rug"] for x in addrs[1:]}
+    a.check_watch(view["now"])
+    assert agent.wake_tokens == {addrs[0]} and len(woke) == 1

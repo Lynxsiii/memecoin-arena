@@ -110,14 +110,17 @@ buy (at most {MOON_PCT}% of your equity each). The arena keeps a moonshot's stop
 at {MOON_TRAIL}% or wider so noise can't shake it out, and the exit ladder still takes profits on the way up. Closing ANY position
 at 3x or more of what you put in earns runner bonus points: {RUNNER_TIERS}. your_score shows your moonshot slots.
 
-Scoring: points are the only score that counts, and the scoreboard ranks everyone by them. Your points are your
-best single life, finished or in progress: that life's profit after every cost as a % of the starting stake, plus
-your runner bonuses. You have {LIVES} lives. If your equity falls under {BUST_PCT}% of your stake you go bust: everything
+Scoring: points are the only score that counts, and the scoreboard ranks everyone by them.
+Points = the best your best life ever reached, as % of the stake: every life, finished or in progress, scores its
+high-water mark (its highest equity at liquidation value, after every cost, minus where it started, as a % of the
+starting stake), and your points are your best life's score plus your runner bonuses. A life keeps its high-water mark even if it later busts. You have
+{LIVES} lives. If your equity falls under {BUST_PCT}% of your stake you go bust: everything
 you hold is sold and you get a fresh stake. A bust costs the life, nothing else: it never lowers your points.
 {REGEN_TEXT} Your real P&L across all your lives is shown separately (real_pnl_pct) and does not rank you.
 Your lives are fuel: use your first life fast and aggressively to find what works, then try to beat your own best
-life. your_score shows your points, your best life (best_life_pct, best_life_no), this_life_pct, the best life among
-the Claudes (leader_best_life_pct), the lives you have left, next_life_in_min and the bust line.
+life. your_score shows your points, your best life (best_life_pct, best_life_no), this life now (this_life_pct) and at
+its peak (this_life_peak_pct), the best life among the Claudes (leader_best_life_pct), the lives you have left,
+next_life_in_min and the bust line.
 
 "room_post" (at most 280 characters) posts to the strategy room, the chat all the Claudes share to get better at
 trading: strategies, lessons from your own trades, sizing and risk rules, how to read the data, questions, and
@@ -167,9 +170,9 @@ JOURNAL_CHARS = 300
 # What each look lists, by universe (market.UNIVERSE). all: one candidates list. pumpfun: two lanes and how pump.fun works.
 UNIVERSE_TEXT_ALL = """- candidates: the busiest tokens that passed the vetoes, each with its "structure". "chg_since" is the price change from
   2, 5, 10, 20 and 30 minutes ago to now, from the arena's own 30-second price history, and swing_30m its noise level."""
-UNIVERSE_TEXT_PUMPFUN = """- graduates: pump.fun coins that graduated to PumpSwap in the last 6 hours and passed the vetoes, newest first (at
-  most 15), each with minutes_since_graduation and its "structure".
-- curve: pump.fun coins still on their bonding curve that passed the vetoes (at most 15), the fastest-filling first.
+UNIVERSE_TEXT_PUMPFUN = """- graduates: pump.fun coins that graduated to PumpSwap in the last 6 hours and passed the vetoes, newest first (the
+  top 15, plus any coin the watcher woke you for), each with minutes_since_graduation and its "structure".
+- curve: pump.fun coins still on their bonding curve that passed the vetoes (the top 15, plus any coin the watcher woke you for), the fastest-filling first.
   curve_pct is how far the curve has filled (0-100); curve_pct_chg_10m is how much it filled in the last 10 minutes
   (for a coin tracked under 10 minutes, its fill since tracking began scaled to a 10-minute pace; null in its first 2
   minutes).
@@ -245,7 +248,7 @@ MAX_BUY_FRAC = min(1.0, max(0.01, float(os.environ.get("ARENA_LLM_MAX_BUY_PCT", 
 PERSONAS = {
     "degen": ("Degen", "Your style: degen. You hunt fresh curve coins and fast movers in both lanes, size big (a quarter of your "
                        "cash or more when you like a setup), take profits fast and move on. You expect to burn lives; that is what they are for. You still "
-                       "skip the obvious rugs the vetoes leave behind (red rating, creator rug history)."),
+                       "skip the obvious rugs the vetoes leave behind, like a red rating."),
     "ape": ("Ape", "Your style: ape. One conviction coin per life: when you find a curve coin or fresh graduate with real net "
                    "buying from many wallets, you put a large share of your cash into it (think a third to two thirds, sized "
                    "to the pool so your own exit doesn't crush the price), hold for the multiple and let the ladder take "
@@ -907,7 +910,7 @@ class CouncilAgent(LLMAgent):
 # controls, became Graduate and Runner).
 # Run 8 (2026-10-07): pump.fun only, Haiku 5.5 x4 (Graduate, Runner, Skeptic, Shadow) plus Sonnet 5.5 x2 (Graduate,
 # Shadow) to see whether the cheaper model matches the dearer one on the same strategies.
-# Run 8b (2026-10-07, mid-run): two risk-taker Haikus join (Degen, Ape) now that points are the best single life.
+# Run 8b (2026-10-07, mid-run): two risk-taker Haikus join (Degen, Ape) now that points are the best life's high-water mark.
 DEFAULT_LINEUP = ("claude-haiku-5-5:graduate,claude-haiku-5-5:runner,claude-haiku-5-5:skeptic,claude-haiku-5-5:shadow,"
                   "claude-sonnet-5-5:graduate,claude-sonnet-5-5:shadow,claude-haiku-5-5:degen,claude-haiku-5-5:ape")
 

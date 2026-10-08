@@ -19,32 +19,61 @@ def _board(a, name):
     return [{"name": name, "points": a.points(name)}]
 
 
-def test_best_life_counts_not_the_sum(arena_llm):
+def _bust(a, name, now):
+    """Drive the Claude under the bust line and run the tick's peak tracking and bust check."""
+    a.accounts[name]["cash"] = 50.0
+    a.track_peaks(now)
+    a.check_busts(now)
+
+
+def _set_equity(a, name, usd, now):
+    a.accounts[name]["cash"] = usd
+    a.track_peaks(now)
+
+
+def test_life_that_peaked_then_busted_keeps_its_peak(arena_llm):
     a, name, now, _ = _claude(arena_llm)
+    _set_equity(a, name, 1400.0, now)            # +40% at the top
+    _bust(a, name, now + 30)                     # ...then it busts
     acct = a.accounts[name]
-    acct.update(busts=[{"ts": now, "equity": 1400}], stakes=2, life_start=1000.0, cash=900.0,
-                lives_log=[{"life": 1, "start": 1000.0, "end": 1400.0, "result": 400.0}])
-    assert round(a.points(name), 6) == 40.0          # life 1 at +40 beats the current life at -10
+    assert acct["lives_log"][0]["peak"] == 1400.0 and "life_peak" not in acct
+    assert round(a.points(name), 6) == 40.0       # the busted life keeps its +40
+    _set_equity(a, name, acct["life_start"] + 250, now + 60)   # life 2 peaks at +25
+    _set_equity(a, name, acct["life_start"] + 50, now + 90)    # and is +5 now
+    assert round(a.points(name), 6) == 40.0 and a.best_life(name)[0] == 1
     acct["runner_bonus"] = 5.0
-    assert round(a.points(name), 6) == 45.0          # runner bonus on top
+    assert round(a.points(name), 6) == 45.0
 
 
-def test_best_of_two_finished_lives(arena_llm):
+def test_current_life_scores_its_peak(arena_llm):
     a, name, now, _ = _claude(arena_llm)
+    _set_equity(a, name, 1250.0, now)            # peak +25
+    _set_equity(a, name, 1050.0, now + 30)       # now +5
+    assert round(a.points(name), 6) == 25.0
+    s = a.your_score(name, _board(a, name), now + 30)
+    assert s["this_life_peak_pct"] == 25.0 and s["this_life_pct"] == 5.0
+    assert s["best_life_pct"] == 25.0 and s["best_life_no"] == 1 and s["leader_best_life_pct"] == 25.0
+    a.accounts[name]["bonus"] = 30.0             # legacy milestone bonus no longer counts
+    assert round(a.points(name), 6) == 25.0
+
+
+def test_best_of_finished_lives_and_out(arena_llm):
+    a, name, now, _ = _claude(arena_llm)
+    _set_equity(a, name, 1150.0, now)            # life 1 peaks +15
+    _bust(a, name, now + 30)
+    _bust(a, name, now + 60)                     # life 2 never got above its start
     acct = a.accounts[name]
-    acct.update(out=True, busts=[{"ts": now, "equity": 0}] * 3, cash=0.0, life_start=0.0,
-                lives_log=[{"life": 1, "start": 1000.0, "end": 700.0, "result": -300.0},
-                           {"life": 2, "start": 1000.0, "end": 1150.0, "result": 150.0},
-                           {"life": 3, "start": 1000.0, "end": 50.0, "result": -950.0}])
-    assert round(a.points(name), 6) == 15.0
+    _set_equity(a, name, acct["life_start"] + 80, now + 90)    # life 3 peaks +8
+    _bust(a, name, now + 120)
+    assert acct.get("out") and [round(l["peak"] - l["start"], 2) for l in acct["lives_log"]] == [150.0, 0.0, 80.0]
+    assert round(a.points(name), 6) == 15.0 and a.best_life(name)[0] == 1
 
 
-def test_current_life_alone(arena_llm):
+def test_legacy_lives_without_peak(arena_llm):
     a, name, now, _ = _claude(arena_llm)
-    a.accounts[name]["cash"] = 1200.0
-    assert round(a.points(name), 6) == 20.0
-    a.accounts[name]["bonus"] = 30.0                 # legacy milestone bonus no longer counts
-    assert round(a.points(name), 6) == 20.0
+    a.accounts[name].update(busts=[{"ts": now, "equity": 60}], stakes=2, life_start=1060.0, cash=1060.0,
+                            lives_log=[{"life": 1, "start": 1000.0, "end": 60.0, "result": -940.0}])
+    assert a.life_results(name) == [(1, 0.0), (2, 0.0)]
 
 
 def test_bots_points_are_pnl(arena_llm):
@@ -53,15 +82,13 @@ def test_bots_points_are_pnl(arena_llm):
     assert a.points(name) == a.pnl_pct(name)
 
 
-def test_your_score_fields(arena_llm):
+def test_your_score_fields(arena_llm, monkeypatch):
+    monkeypatch.setattr(arena_mod, "LIFE_REGEN_MIN", 60.0)
     a, name, now, _ = _claude(arena_llm)
-    acct = a.accounts[name]
-    acct.update(busts=[{"ts": now, "equity": 50}], stakes=2, life_start=1050.0, cash=1050.0 + 105.0,
-                lives_log=[{"life": 1, "start": 1000.0, "end": 50.0, "result": -950.0}], life_regen_ts=now - 20 * 60)
-    s = a.your_score(name, _board(a, name), now)
-    assert s["best_life_pct"] == 10.5 and s["best_life_no"] == 2 and s["leader_best_life_pct"] == 10.5
-    assert s["this_life_pct"] == 10.5 and s["lives_left"] == 2   # same basis as points: % of the $1000 stake
-    assert s["next_life_in_min"] == 40
+    a.check_regen(now)                            # full lives: the clock waits at now
+    _bust(a, name, now + 30)
+    s = a.your_score(name, _board(a, name), now + 20 * 60)
+    assert s["lives_left"] == 2 and s["next_life_in_min"] == 40
     assert "losses_count_this_life" not in s and "next_milestone" not in s
 
 
@@ -71,33 +98,60 @@ def test_next_life_zero_at_max_lives(arena_llm):
     assert s["lives_left"] == 3 and s["next_life_in_min"] == 0
 
 
-def test_hourly_regen_grants_a_life(arena_llm, monkeypatch):
+def test_regen_clock_only_runs_below_full_lives(arena_llm, monkeypatch):
     monkeypatch.setattr(arena_mod, "LIFE_REGEN_MIN", 60.0)
     a, name, now, woke = _claude(arena_llm)
     acct = a.accounts[name]
-    acct.update(busts=[{"ts": now, "equity": 50}], stakes=2, life_start=1000.0, life_regen_ts=now - 59 * 60)
     a.check_regen(now)
-    assert a.lives_info(name)["lives_left"] == 2 and not woke     # not an hour yet
-    a.check_regen(now + 61)
-    assert a.lives_info(name)["lives_left"] == 3 and acct["hearts"] == 1 and acct["life_regen_ts"] == now + 61
+    a.check_regen(now + 7200)                     # two hours at full lives
+    t = now + 7230
+    _bust(a, name, t)
+    a.check_regen(t)                              # same tick as the bust: no refund
+    assert a.lives_info(name)["lives_left"] == 2
+    a.check_regen(t + 3540)
+    assert a.lives_info(name)["lives_left"] == 2
+    woke.clear()
+    a.check_regen(t + 3600)                       # an hour after the bust
+    assert a.lives_info(name)["lives_left"] == 3 and acct["hearts"] == 1
     assert "You got a life back" in acct["life_event"]["text"] and woke
-    a.check_regen(now + 7200)                                     # at max lives: nothing more
+    assert not any("got a life back" in p["text"] for p in a.db.room_posts())  # not room news
+    a.check_regen(t + 3600 + 7200)                # at full lives: nothing more
     assert acct["hearts"] == 1
+
+
+def test_restart_does_not_grant_a_life_at_once(arena_llm, monkeypatch):
+    monkeypatch.setattr(arena_mod, "LIFE_REGEN_MIN", 60.0)
+    a, name, now, _ = _claude(arena_llm)
+    acct = a.accounts[name]
+    acct.update(busts=[{"ts": now - 86400, "equity": 50}], stakes=2, life_start=1050.0, cash=1050.0)
+    acct.pop("life_regen_ts", None)               # saved before run 8b: no clock yet
+    a.db.save_state(name, acct)
+    b = arena_mod.Arena(a.market, a.db, list(a.agents.values()), start_cash=1000, tick=30)
+    b.check_regen(b.started + 30)
+    assert b.lives_info(name)["lives_left"] == 2
+    b.check_regen(b.started + 3600)
+    assert b.lives_info(name)["lives_left"] == 3
 
 
 def test_regen_revives_an_out_claude(arena_llm, monkeypatch):
     monkeypatch.setattr(arena_mod, "LIFE_REGEN_MIN", 60.0)
     a, name, now, woke = _claude(arena_llm)
-    acct = a.accounts[name]
-    acct.update(out=True, busts=[{"ts": now, "equity": 40}] * 3, stakes=3, cash=40.0, life_start=40.0,
-                lives_log=[{"life": i, "start": 1000.0, "end": 40.0, "result": -960.0} for i in (1, 2, 3)],
-                life_regen_ts=now - 3700)
-    assert a.lives_info(name)["lives_left"] == 0
-    a.check_regen(now)
-    assert not acct.get("out") and acct["stakes"] == 4 and acct["cash"] == 1040.0
-    assert acct["life_start"] == a.equity(name) == 1040.0
+    agent, acct = a.agents[name], a.accounts[name]
+    for i in range(3):
+        _bust(a, name, now + i)
+    assert acct.get("out") and a.lives_info(name)["lives_left"] == 0
+    agent.ready, agent.next_run = (["stale order"], {}), now + 9999
+    a.pending.append((name, {"action": "buy", "token": "T1pump", "usd": 60}))
+    cash = acct["cash"]
+    a.check_regen(now + 3)                        # the clock started at the first bust: not yet
+    assert acct.get("out")
+    a.check_regen(now + 3600)
+    assert not acct.get("out") and acct["stakes"] == 4 and acct["cash"] == cash + 1000
+    assert acct["life_start"] == a.equity(name) and "life_peak" not in acct
     assert a.lives_info(name)["lives_left"] == 1
+    assert agent.ready is None and agent.next_run == 0 and not any(n == name for n, _ in a.pending)
     assert any("back in with a fresh stake" in w for w in woke)
+    assert any("back in with a fresh stake" in p["text"] for p in a.db.room_posts())
 
 
 def test_regen_off(arena_llm, monkeypatch):
@@ -125,7 +179,8 @@ def test_milestone_default_off():
 def test_brief_scoring_paragraph():
     from claude_agents import LLM_SYSTEM, fill_brief
     b = fill_brief(LLM_SYSTEM, 1, 60)
-    assert "best single life" in b and "Your lives are fuel" in b
+    assert "Points = the best your best life ever reached, as % of the stake" in b and "Your lives are fuel" in b
+    assert "high-water mark" in b and "this_life_peak_pct" in b
     assert "{" not in b.split("Scoring:")[1].split('"room_post"')[0]
     assert "milestone" not in b.lower()
 
