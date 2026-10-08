@@ -100,6 +100,8 @@ def create_app(arena, db, mock):
                     # equity is the SCORE equity (every extra stake after a bust subtracted); trading_equity is what it holds
                     "equity": round(v["score_equity"], 2), "trading_equity": round(v["equity"], 2), "cash": round(v["cash"], 2),
                     "pnl_pct": round(v["pnl_pct"], 2), "points": round(v["points"], 2),
+                    # the current life, which the dashboard headlines for Claudes (equity/pnl_pct above stay the real-money view)
+                    "life_equity": round(v["equity"], 2), **arena.life_view(name, now),
                     "life": (v["lives"] or {}).get("life"), "hearts_earned": (v["lives"] or {}).get("hearts_earned"),
                     "runner_bonus": (v["lives"] or {}).get("runner_bonus"),
                     "lives": (v["lives"] or {}).get("lives"), "lives_left": (v["lives"] or {}).get("lives_left"),

@@ -153,9 +153,11 @@
     const busts = bustsOf(a);
     const holding = busts.length && typeof a.trading_equity === "number" && isFinite(a.trading_equity)
       ? `<p class="am-hold">Trading with ${money(a.trading_equity)} right now; each fresh ${money(data?.start_cash || 1000, 0)} stake after a bust counts against its score.</p>` : "";
+    const lifeLine = typeof a.this_life_pct === "number" && isFinite(a.this_life_pct)
+      ? `<p class="am-hold">Life ${esc(String(typeof a.life === "number" ? a.life : busts.length + 1))} of ${esc(String(total))} · this life ${pct(a.this_life_pct)}${typeof a.best_life_pct === "number" ? ` · best life ${pct(a.best_life_pct)} (life ${esc(String(a.best_life_no))})` : ""} · real P&amp;L ${pct(a.pnl_pct)}${a.next_life_in_min > 0 ? ` · next life in ${esc(String(a.next_life_in_min))} min` : ""}</p>` : "";
     return `<div class="am-lives"><span class="am-lk">Lives:</span><span aria-hidden="true">${hearts}</span>
         <span>${left ? `(${left} of ${total} left)` : `<span class="am-gone">(out of lives)</span>`}</span></div>
-      ${busts.length ? `<ul class="am-busts">${busts.map(b => `<li>Went bust at ${esc(bustTime(b.ts))} with <b>${money(Number(b.equity) || 0, 0)}</b> left</li>`).join("")}</ul>` : ""}${holding}`;
+      ${busts.length ? `<ul class="am-busts">${busts.map(b => `<li>Went bust at ${esc(bustTime(b.ts))} with <b>${money(Number(b.equity) || 0, 0)}</b> left</li>`).join("")}</ul>` : ""}${holding}${lifeLine}`;
   }
 
   // The "Who's really winning" report card (alpha vs each yardstick, fee drag, top-3 share, average win and loss). The

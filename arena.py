@@ -482,6 +482,21 @@ class Arena:
                 "life": len(busts) + 1, "hearts_earned": acct.get("hearts", 0), "bonus": acct.get("bonus", 0.0),
                 "runner_bonus": acct.get("runner_bonus", 0.0)}
 
+    def life_view(self, name, now):
+        """The current life as the dashboard headlines it for a Claude (every % is of the starting stake, same basis as
+        points): this life's return and peak, the best life so far, stakes drawn and minutes to the next life.
+        All None for bots, who have no lives."""
+        if self.agents[name].kind != "llm":
+            return {"this_life_pct": None, "this_life_peak_pct": None, "best_life_pct": None, "best_life_no": None,
+                    "stakes": None, "next_life_in_min": None}
+        acct = self.accounts[name]
+        start = acct.get("life_start", self.start_cash)
+        best_no, best_pct = self.best_life(name)
+        return {"this_life_pct": round((self.equity(name) - start) / self.start_cash * 100, 2),
+                "this_life_peak_pct": round((self.life_peak(name) - start) / self.start_cash * 100, 2),
+                "best_life_pct": round(best_pct, 2), "best_life_no": best_no,
+                "stakes": acct.get("stakes", 1), "next_life_in_min": self.next_life_in_min(name, now)}
+
     def your_score(self, name, board, now):
         claudes = [r for r in board if self.agents[r["name"]].kind == "llm"]
         info = self.lives_info(name) or {}

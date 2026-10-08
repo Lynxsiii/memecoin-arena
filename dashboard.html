@@ -772,6 +772,12 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const money = (n, d = 2) => (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString(undefined, {minimumFractionDigits: d, maximumFractionDigits: d});
 const signed = (n, d = 2) => (n >= 0 ? "+" : "-") + money(Math.abs(n), d);
 const pct = n => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
+// Claudes headline the life they are playing now (what they hold, return vs that life's stake); the real money across
+// all lives is secondary ("real"). Bots, and older servers that send no life fields, keep the real-money view.
+const lifeView = a => a.kind === "llm" && typeof a.this_life_pct === "number" && typeof a.life_equity === "number";
+const headEq = a => lifeView(a) ? a.life_equity : a.equity;
+const headPct = a => lifeView(a) ? a.this_life_pct : a.pnl_pct;
+const LIFE_TIP = "This life: equity vs the stake it started with. Points = best life's peak. real = money across all lives.";
 const ordinal = n => n + (["th", "st", "nd", "rd"][(n % 100 > 10 && n % 100 < 14) ? 0 : Math.min(n % 10, 4) % 4] || "th");
 const clock = ts => new Date(ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"});
 const span = s => s < 60 ? `${Math.max(0, Math.round(s))}s` : s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${(s / 3600).toFixed(1)} h` : `${(s / 86400).toFixed(1)} days`;
@@ -897,7 +903,9 @@ function renderStage() {
   // a Claude that went bust sits far under the start (its score counts every extra stake), so it doesn't set the scale for everyone else
   const busted = a => a.out === true || (Array.isArray(a.busts) && a.busts.length > 0);
   const scaled = agents.some(a => !busted(a)) ? agents.filter(a => !busted(a)) : agents;
-  const maxAbs = Math.max(3, ...scaled.map(a => Math.abs(a.pnl_pct)));
+  // pillar height follows the game score for Claudes (points) and real P&L for bots, so the podium matches the scoreboard
+  const height = a => lifeView(a) && typeof a.points === "number" ? a.points : a.pnl_pct;
+  const maxAbs = Math.max(3, ...scaled.map(a => Math.abs(height(a))));
   const t = now(), shown = bubbleLanes(agents, recentMovers(t));
   $("lanes").style.setProperty("--base", base + "px");
   document.querySelectorAll(".vs .start").forEach(el => el.textContent = `Start ${money(data.start_cash, 0)}`);
@@ -905,7 +913,7 @@ function renderStage() {
     const lane = document.querySelector(`.lane[data-name="${CSS.escape(a.name)}"]`);
     const label = document.querySelector(`.label[data-name="${CSS.escape(a.name)}"]`);
     if (!lane) return;
-    const h = Math.max(minH, Math.min(base + range, Math.round(base + a.pnl_pct / maxAbs * range)));
+    const h = Math.max(minH, Math.min(base + range, Math.round(base + height(a) / maxAbs * range)));
     const out = a.out === true, lives = livesText(a);
     lane.querySelector(".pillar").style.height = h + "px";
     lane.style.setProperty("--top", h + "px");
@@ -913,7 +921,7 @@ function renderStage() {
     lane.classList.toggle("thinking", !!a.thinking_since);
     lane.classList.toggle("show-bubble", shown.has(a.name));
     lane.classList.toggle("out", out);
-    lane.setAttribute("aria-label", `${a.name}, ${ordinal(rank + 1)}, ${money(a.equity, 0)} (${pct(a.pnl_pct)})${lives ? ", " + lives : ""}`);
+    lane.setAttribute("aria-label", `${a.name}, ${ordinal(rank + 1)}, ${money(headEq(a), 0)} (${pct(headPct(a))}${lifeView(a) ? " this life, real " + pct(a.pnl_pct) : ""})${lives ? ", " + lives : ""}`);
     const mode = a.kind === "llm" && a.mode && a.mode !== "normal" ? a.mode : "", badge = lane.querySelector(".badge");
     const tag = out ? "out" : mode;
     badge.hidden = !tag; badge.textContent = out ? "OUT" : mode; badge.className = "badge " + tag;
@@ -922,8 +930,10 @@ function renderStage() {
     setHTML(bub.querySelector(".say"), b.say);
     setHTML(bub.querySelector("small"), b.small);
     bub.querySelector("small").hidden = !b.small;
-    label.querySelector(".eq").textContent = money(a.equity, 0);
-    label.querySelector(".pnl").innerHTML = `<span class="${a.pnl_pct >= 0 ? "pos" : "neg"}">${pct(a.pnl_pct)}</span>`;
+    label.querySelector(".eq").textContent = money(headEq(a), 0);
+    label.querySelector(".pnl").innerHTML = lifeView(a)
+      ? `<span class="${headPct(a) >= 0 ? "pos" : "neg"}" title="${LIFE_TIP}">${pct(headPct(a))}</span>`
+      : `<span class="${a.pnl_pct >= 0 ? "pos" : "neg"}">${pct(a.pnl_pct)}</span>`;
     label.classList.toggle("out", out);
     const livesEl = label.querySelector(".lives");
     if (livesEl) setHTML(livesEl, heartsHTML(a));
@@ -944,7 +954,7 @@ function renderStage() {
     fill.style.width = share.toFixed(1) + "%"; fill.classList.toggle("neg", avg < -0.5);
     head.querySelector(".hp").setAttribute("aria-label", `${team.title}: ${signed(total, 0)} total, average ${pct(avg)}${team === lead ? ", leading" : ""}`);
   }
-  $("stage").setAttribute("aria-label", "Leaderboard: " + agents.map((a, i) => `${ordinal(i + 1)} ${a.name} ${money(a.equity, 0)} (${pct(a.pnl_pct)})`).join(", "));
+  $("stage").setAttribute("aria-label", "Leaderboard: " + agents.map((a, i) => `${ordinal(i + 1)} ${a.name} ${money(headEq(a), 0)} (${pct(headPct(a))}${lifeView(a) ? " this life, real " + pct(a.pnl_pct) : ""})`).join(", "));
 }
 
 function celebrate(trade) {
@@ -1121,10 +1131,10 @@ function renderMiniBoard() {
   setHTML($("mini-board"), data.agents.map((a, i) => {
     const out = a.out === true, lives = livesText(a);
     return `
-    <div class="mini-row${out ? " out" : ""}" data-agent="${esc(a.name)}" style="--c:${colorOf(a)}" tabindex="0" role="button" aria-label="${esc(a.name)}, ${ordinal(i + 1)}, ${pct(a.pnl_pct)}${lives ? ", " + lives : ""}. Open profile">
+    <div class="mini-row${out ? " out" : ""}" data-agent="${esc(a.name)}" style="--c:${colorOf(a)}" tabindex="0" role="button" aria-label="${esc(a.name)}, ${ordinal(i + 1)}, ${pct(headPct(a))}${lifeView(a) ? " this life, real " + pct(a.pnl_pct) : ""}${lives ? ", " + lives : ""}. Open profile">
       <span class="rk">${ordinal(i + 1)}</span>${avatar(a.name)}
-      <span class="nm"><b>${esc(a.name)}${heartsHTML(a)}</b><small>${teamName(teamOf(a))}${typeof a.lives === "number" && typeof a.points === "number" ? ` · <span class="${a.points >= 0 ? "pos" : "neg"}" title="Game points: the best your best life ever reached (its peak) as % of the stake, plus runner bonuses; lives come back one per hour">${a.points >= 0 ? "+" : ""}${a.points.toFixed(1)} pts</span>` : ""} · ${out ? `<span class="neg">Out</span>` : a.positions.length ? `${a.positions.length} open` : "all cash"} · ${a.trades} trade${a.trades === 1 ? "" : "s"}</small></span>
-      <span class="eq">${money(a.equity, 0)}</span><span class="pc ${a.pnl_pct >= 0 ? "pos" : "neg"}">${pct(a.pnl_pct)}</span></div>`;
+      <span class="nm"><b>${esc(a.name)}${heartsHTML(a)}</b><small>${teamName(teamOf(a))}${typeof a.lives === "number" && typeof a.points === "number" ? ` · <span class="${a.points >= 0 ? "pos" : "neg"}" title="Game points: the best your best life ever reached (its peak) as % of the stake, plus runner bonuses; lives come back one per hour">${a.points >= 0 ? "+" : ""}${a.points.toFixed(1)} pts</span>` : ""}${lifeView(a) ? ` · <span title="${LIFE_TIP}">real ${pct(a.pnl_pct)}</span>` : ""} · ${out ? `<span class="neg">Out</span>` : a.positions.length ? `${a.positions.length} open` : "all cash"} · ${a.trades} trade${a.trades === 1 ? "" : "s"}</small></span>
+      <span class="eq">${money(headEq(a), 0)}</span><span class="pc ${headPct(a) >= 0 ? "pos" : "neg"}"${lifeView(a) ? ` title="${LIFE_TIP}"` : ""}>${pct(headPct(a))}</span></div>`;
   }).join(""));
 }
 
