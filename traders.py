@@ -103,6 +103,8 @@ from collections import deque
 
 import requests
 
+import signals as _sig  # the ramp window (RAMP_MIN_PCT) for the pool-poll priority
+
 try:
     import websocket  # websocket-client
 except ImportError:  # the leaderboard still works without it; only live Helius signals need it
@@ -441,6 +443,9 @@ class Tracker:
         # gecko polling
         self.pools = {}              # pool -> {"mint", "symbol", "last", "due", "span", "fails"}
         self.pool_of = {}            # mint -> (pool or None, ts) resolved through /tokens/{mint}/pools
+        # run 9b poll priority, rebuilt by _sync_pools every 30 s: mints any agent holds, and curve coins in the ramp
+        # zone (their flow numbers feed ramp_setup); _next_pool polls these tiers first
+        self.priority_mints = {"held": set(), "ramp": set()}
         self.gecko_backoff = 0.0
         self.gecko_backoff_until = 0.0
         self.gecko_times = deque()   # timestamps of this module's GeckoTerminal requests (rolling-minute budget)
@@ -847,6 +852,14 @@ class Tracker:
             return
         wanted = {}
         resolves = 0
+        held = set(getattr(self.market, "last_held", None) or ())
+        ramp = set()
+        for t in cands:
+            pump = t.get("pump") if isinstance(t.get("pump"), dict) else {}
+            if (str(t.get("dex") or "").lower() == "pumpfun" and not pump.get("graduated")
+                    and (pump.get("curve_pct") or 0) >= _sig.RAMP_MIN_PCT and t.get("address")):
+                ramp.add(t["address"])
+        self.priority_mints = {"held": held, "ramp": ramp}
         for t in cands:
             mint = t.get("address")
             if not mint or mint in QUOTES:
@@ -966,12 +979,26 @@ class Tracker:
                     self._cleanup(now)
                 except Exception as e:
                     self._err(f"cleanup failed: {e}")
-            due = [pool for pool, p in self.pools.items() if p["due"] <= now]
-            if due:
-                pool = min(due, key=lambda k: self.pools[k]["due"])
-                if pool in self.pools:
-                    self._poll_pool(pool, now)
+            pool = self._next_pool(now)
+            if pool is not None and pool in self.pools:
+                self._poll_pool(pool, now)
             self.stop_event.wait(interval)
+
+    def _next_pool(self, now):
+        """The due pool to poll next, or None. Run 9b priority: pools of tokens any agent holds, then pools of curve
+        coins in the ramp zone (self.priority_mints, from _sync_pools), then the rest; earliest due first within a
+        tier. With ~500 tracked pools and ~6 polls a minute, a plain earliest-due order reaches each pool only
+        every hour or two, too stale for the flow numbers ramp_setup and the exits read."""
+        due = [(pool, p) for pool, p in list(self.pools.items()) if p["due"] <= now]
+        if not due:
+            return None
+        pri = self.priority_mints
+        held, ramp = pri.get("held") or set(), pri.get("ramp") or set()
+
+        def rank(item):
+            mint = item[1].get("mint")
+            return (0 if mint in held else 1 if mint in ramp else 2, item[1]["due"])
+        return min(due, key=rank)[0]
 
     # ---------------- signals ----------------
     def _emit_signal(self, ts, wallet, rank, side, mint, symbol, usd, source, tx):

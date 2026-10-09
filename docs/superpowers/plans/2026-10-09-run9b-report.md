@@ -68,3 +68,17 @@ The running arena only picks up these changes when it restarts.
 - **Slow ticks.** A 500-token refresh makes about 17 DexScreener requests in sequence, so a slow DexScreener could push ticks past 20 s. The new print will show it.
 - **Stale wording.** The cap's brief line says "yesterday", as specified, and will read stale after a few days.
 - **Brief text vs the env cap.** `fill_brief` substitutes the cap amount, but the evidence numbers in that line are fixed.
+
+## Follow-up: pool-poll priority and the cap note's date
+Commit: `fix(traders): poll held and ramp-zone pools first; date the graduate-cap note`
+Tests: `python -m pytest tests -q` gives `161 passed` (one new test, `test_poll_priority_held_then_ramp_then_rest`).
+
+- **Pool polling order (`traders.py`).** `_sync_pools` runs every 30 s. It now also rebuilds `self.priority_mints` from the candidates it already reads:
+  - `held`: `market.last_held`, the coins any agent holds.
+  - `ramp`: curve coins in the ramp zone (dex `pumpfun`, not graduated, `pump.curve_pct >= signals.RAMP_MIN_PCT`).
+- **How the loop picks.** The poll loop now calls a new `_next_pool(now)`. It polls due pools of held coins first, then due ramp-zone pools, then everything else, earliest due first within each group. The global rate (`ARENA_TRADERS_GECKO_PER_MIN`, default 6 a minute) is unchanged.
+- **The test.** Four due pools: a plain one (the most overdue), a held one, a ramp-zone one and a graduate. They are polled in the order held, ramp-zone, plain, graduate.
+- **Brief.** The cap line now says "on 2026-10-08" instead of "yesterday".
+- **Remaining concern.**
+  - Held and ramp-zone pools are polled first whenever they are due. After a pool is polled, `_poll_pool` sets its next due time 30 s to 30 min ahead, depending on its trading pace.
+  - At about 6 polls a minute, if many held or ramp-zone pools come due together, the other pools wait. Those other pools are graduates and early curve coins, so their flow data gets staler still.

@@ -216,7 +216,7 @@ def test_graduate_cap_off_and_bots_exempt(arena_llm, monkeypatch):
 
 def test_brief_names_graduate_cap(monkeypatch):
     b = fill_brief(LLM_SYSTEM, 1, 60)
-    assert "- Buys on graduated coins are capped at $100 each (graduates were 38 buys for -$809 yesterday" in b
+    assert "- Buys on graduated coins are capped at $100 each (graduates were 38 buys for -$809 on 2026-10-08" in b
     assert "Curve buys are not capped." in b and "{GRAD_CAP_TEXT}" not in b
     monkeypatch.setattr(arena_mod, "LLM_GRADUATE_MAX_USD", 0.0)
     assert "capped at" not in fill_brief(LLM_SYSTEM, 1, 60)
@@ -255,3 +255,37 @@ def test_step_reports_its_wall_time(arena_llm, monkeypatch):
     except RuntimeError:
         pass
     assert len(seen) == 2  # a failed tick still reports its time (run_forever prints the error)
+
+
+# ------------------------------------------------------------------ 5. pool-poll priority (traders.py)
+class _PoolMarket:
+    def __init__(self, toks, held):
+        self.toks, self.last_held = toks, set(held)
+
+    def candidates(self):
+        return list(self.toks)
+
+
+def test_poll_priority_held_then_ramp_then_rest(monkeypatch):
+    import traders
+    toks = [{"address": "PLAINpump", "pair": "poolPlain", "dex": "pumpfun", "pump": {"curve_pct": 20.0}},
+            {"address": "HELDpump", "pair": "poolHeld", "dex": "pumpswap", "pump": {"graduated": 1}},
+            {"address": "RAMPpump", "pair": "poolRamp", "dex": "pumpfun", "pump": {"curve_pct": 62.0}},
+            {"address": "GRADpump", "pair": "poolGrad", "dex": "pumpswap",
+             "pump": {"graduated": 1, "curve_pct": 100.0}}]
+    tr = traders.Tracker.__new__(traders.Tracker)
+    tr.market, tr.pools, tr.pool_of = _PoolMarket(toks, held={"HELDpump"}), {}, {}
+    tr.priority_mints = {"held": set(), "ramp": set()}
+    monkeypatch.setattr(tr, "_remember_symbol", lambda *a: None, raising=False)
+    tr._sync_pools()
+    assert tr.priority_mints == {"held": {"HELDpump"}, "ramp": {"RAMPpump"}}
+    now = 1000.0
+    for i, pool in enumerate(("poolPlain", "poolGrad", "poolRamp", "poolHeld")):
+        tr.pools[pool]["due"] = now - 100 + i  # the plain pool is the most overdue
+    polled = []
+    for _ in range(4):
+        pool = tr._next_pool(now)
+        polled.append(pool)
+        tr.pools[pool]["due"] = now + 60  # what _poll_pool does
+    assert polled == ["poolHeld", "poolRamp", "poolPlain", "poolGrad"]
+    assert tr._next_pool(now) is None

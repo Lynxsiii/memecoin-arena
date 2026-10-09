@@ -253,7 +253,7 @@ def graduate_cap_text(ar):
     if not ar.LLM_GRADUATE_MAX_USD:
         return ""
     cap = f"${ar.LLM_GRADUATE_MAX_USD:g}"
-    return (f"- Buys on graduated coins are capped at {cap} each (graduates were 38 buys for -$809 yesterday; the curve\n"
+    return (f"- Buys on graduated coins are capped at {cap} each (graduates were 38 buys for -$809 on 2026-10-08; the curve\n"
             f"  was 22 buys for +$506). Curve buys are not capped.\n")
 
 
