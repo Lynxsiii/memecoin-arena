@@ -124,6 +124,8 @@ def create_app(arena, db, mock):
             "now": now, "mock": mock, "start_cash": arena.start_cash, "started": arena.started, "ticks": arena.ticks,
             "tracked": len(arena.market.candidates()), "agents": rows,
             "trades": db.trades(150), "decisions": db.decisions(60),
+            # StalkChain credit use (calls, credits, cached, skipped, errors, balance) when ARENA_STALKCHAIN_KEY is set
+            **({"stalkchain": dict(arena.stalkchain.stats)} if getattr(arena, "stalkchain", None) is not None else {}),
         })
 
     @app.route("/api/series")
@@ -320,6 +322,12 @@ def main():
                   f"since {time.strftime('%Y-%m-%d %H:%M', time.localtime(since))}")
         except Exception as e:
             print(f"[main] couldn't warm up market memory: {e}")
+    if not args.mock:  # StalkChain lookups only for real mints (stalkchain.py; off without ARENA_STALKCHAIN_KEY)
+        import stalkchain
+        arena.stalkchain = stalkchain.shared()
+        if arena.stalkchain is not None:
+            print(f"[main] StalkChain on: pre-buy {'+'.join(stalkchain.PREBUY) or 'off'}, smart entries every "
+                  f"{stalkchain.ENTRIES_MIN:g} min, budget {stalkchain.DAILY_CREDITS:g} credits/24h")
     if args.reset_money:
         keep = True if args.keep_journals else False if args.wipe_journals else ask_keep_journals()
         arena.reset_money(keep)

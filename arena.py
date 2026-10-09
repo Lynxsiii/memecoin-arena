@@ -25,6 +25,13 @@ Settings (environment variables, read when the Arena is built):
                             the order keeps "capped_to" and a "[capped at $N: graduate]" reason note. Not a refusal.
                             Curve buys (moonshots included) are not capped. 0 disables. Run 9 evidence: graduates were
                             38 Claude buys for -$809, the curve 22 buys for +$506.
+  StalkChain (stalkchain.py, only with ARENA_STALKCHAIN_KEY and only in the live market; main.py sets arena.stalkchain):
+                            a Claude's buy of a coin with no StalkChain verdict yet runs the pre-buy lookups
+                            (ARENA_STALKCHAIN_PREBUY, default deployer + early buyers, 1,000 credits) inside validate();
+                            a deployer rug history refuses the buy (recent_failures: "StalkChain says the deployer
+                            rugged 3 of 4 earlier launches") and vetoes the coin; sniping / bundling are flags. The
+                            verdict shows as structure[mint]["stalkchain"]. Every ARENA_STALKCHAIN_ENTRIES_MIN=30 minutes
+                            one smart-money entries poll fills smart_entries and force-tracks new mints.
   Slow ticks: step() prints "[arena] slow tick: Ns (tracked n)" when one full tick takes over SLOW_TICK_SECS=20 s of
                             wall time, at most once every SLOW_TICK_EVERY_SECS=300 s.
 Execution friction (failed transactions, MEV slippage, fees) is configured in exchange.py; Jupiter quotes in
@@ -56,6 +63,7 @@ from collections import deque
 
 import market_memory
 import signals as sig  # structural signals and safety vetoes (named so it can't clash with tracker.signals())
+import stalkchain
 import strategy_room
 
 from exchange import PRIORITY_FEE_USD, buy_fill, early_penalty, fail_probability, liquidation_value, mev_slippage, sell_fill
@@ -217,6 +225,10 @@ class Arena:
         self.structure = {}     # token -> compact structural view shown to the Claudes
         self.creator_sold = {}  # token -> dollars its creator sold in the last hour (the exit ladder sells on it)
         self._signals_at = 0.0
+        self.stalkchain = None   # stalkchain.Client; main.py sets it in the live market when ARENA_STALKCHAIN_KEY is set
+        self.sc_verdicts = {}    # token -> StalkChain pre-buy verdict (signals.stalkchain_verdict + "checked", "complete")
+        self.smart_entries = []  # stalkchain.summarize_entries rows from the last smart-money entries poll
+        self._entries_at = 0.0
         if hasattr(market, "risk_cache"):
             market.risk_cache.update(db.load_state("__risk_cache__") or {})
 
@@ -275,6 +287,9 @@ class Arena:
                 trend = sig.liquidity_trend(list(self.liq_history.get(a, ())))
                 structure[a] = sig.structural_view(t, flows.get(a), trend, mig, sold.get(a), now,
                                                    chg=self.chg_since(a, now), prices=list(self.history.get(a, ())))
+            self._prune_verdicts(now)
+            for a, v in self.sc_verdicts.items():  # StalkChain verdicts outlive the 60 s signal refresh
+                self._apply_verdict(a, v, structure, vetoes)
             self.vetoes, self.structure, self.creator_sold = vetoes, structure, sold
         except Exception as e:
             print(f"[arena] signals failed (keeping the last ones): {e}")
@@ -400,6 +415,7 @@ class Arena:
                 "market_memory": self.memory.stats(now, self.round_trip(now)) if self.memory else None,
                 "measured_round_trip_cost_pct": self.round_trip(now),
                 "smart_money": self.smart_money(now),
+                **({"smart_entries": self.smart_entries_view(now)} if self.stalkchain is not None else {}),
                 "arena_news": self.news[1] if getattr(self, "news", None) and now - self.news[0] < 3600 else None,
                 # ARENA_MARKET_MEMORY=0 also hides past trades, so a replay can reproduce the older behaviour
                 "token_history": self.db.token_history(name, now - 86400) if self.memory else {}}
@@ -966,6 +982,10 @@ class Arena:
                 return None
             if o["token"] not in held and len(held) >= agent.max_positions:
                 return None
+            if agent.kind == "llm" and self.stalkchain is not None:
+                text = self._stalkchain_refusal(o, usd, view["now"])
+                if text:
+                    return self._refuse(agent.name, o, text, view["now"])
             o["usd"] = usd
             # a shadow buy may name the leader it copies; keep the full wallet, drop anything that matches no leader
             wallet = self._match_leader(agent.name, o.get("following"), view["now"]) \
@@ -1003,6 +1023,86 @@ class Arena:
         if BUY_COOLDOWN_MIN and last is not None and now - last < BUY_COOLDOWN_MIN * 60:
             return f"{what}: {(now - last) / 60:.0f} minutes since your last buy ({BUY_COOLDOWN_MIN:g} minute cooldown)"
         return None
+
+    def _stalkchain_refusal(self, o, usd, now):
+        """The StalkChain pre-buy check for a Claude's buy (stalkchain.py): why the buy is refused, or None.
+        On a mint with no complete verdict it runs the ARENA_STALKCHAIN_PREBUY lookups SYNCHRONOUSLY, inside validate()
+        and the arena lock, each with a 4 s timeout: with the default two lookups that can add up to ~8 s to a tick, once
+        per new mint (results are cached for ARENA_STALKCHAIN_CACHE_H hours, and the daily credit budget bounds how
+        many lookups run a day; a failed lookup backs the client off for a minute). A timeout, an error, an exhausted
+        budget or any missing data never blocks a buy. The verdict is attached to structure[mint]["stalkchain"] (the
+        Claudes see it on later looks) and, when it vetoes, to self.vetoes[mint], so the coin leaves the lanes."""
+        mint = o["token"]
+        v = self.sc_verdicts.get(mint)
+        fresh = bool(v) and bool(v.get("veto") or now - v["checked"] < stalkchain.CACHE_H * 3600)
+        if not (fresh and v.get("complete")):
+            try:
+                summaries = stalkchain.prebuy(self.stalkchain, mint)
+            except Exception as e:  # stalkchain never raises; belt and braces, a lookup must not block a buy
+                print(f"[arena] StalkChain pre-buy check failed: {e}")
+                summaries = {}
+            if summaries:
+                if fresh:  # keep the parts an earlier, partial check already has
+                    summaries = {**v.get("summaries", {}), **summaries}
+                v = {**sig.stalkchain_verdict(summaries, stalkchain.RUG_VETO, stalkchain.SNIPED_FLAG_PCT),
+                     "summaries": summaries, "checked": now,
+                     "complete": all(k in summaries for k in stalkchain.PREBUY)}
+                self.sc_verdicts[mint] = v
+                self._apply_verdict(mint, v, self.structure, self.vetoes)
+        if not (v and v.get("veto")):
+            return None
+        symbol = o.get("symbol")
+        if symbol in (None, "?"):
+            symbol = (self.market.get(mint) or {}).get("symbol") or str(mint)[:6]
+        return f"your buy of {symbol} (${usd:.0f}) was refused: StalkChain says {v['veto']}"
+
+    @staticmethod
+    def _apply_verdict(mint, v, structure, vetoes):
+        """Show a StalkChain verdict in structure[mint]["stalkchain"]; a veto also goes into vetoes[mint]."""
+        if v.get("view"):
+            structure.setdefault(mint, {})["stalkchain"] = v["view"]
+        if v.get("veto"):
+            reason = f"StalkChain: {v['veto']}"
+            lst = vetoes.setdefault(mint, [])
+            if reason not in lst:
+                lst.append(reason)
+
+    def _prune_verdicts(self, now):
+        """Forget expired StalkChain verdicts (vetoes are kept: a deployer's rug history doesn't expire), at most 3000."""
+        ttl = stalkchain.CACHE_H * 3600
+        keep = {a: v for a, v in self.sc_verdicts.items() if v.get("veto") or now - v["checked"] < ttl}
+        if len(keep) > 3000:
+            keep = dict(sorted(keep.items(), key=lambda kv: kv[1]["checked"])[-3000:])
+        self.sc_verdicts = keep
+
+    def poll_smart_entries(self, now):
+        """Every ARENA_STALKCHAIN_ENTRIES_MIN minutes (0 = off): one StalkChain multi-trader entries call (tokens 3+
+        tracked traders bought in the last hour, 125 credits). The rows become smart_entries; mints the market does not
+        track yet are force-tracked with source "copy" (track() refuses non-pump.fun mints in the pumpfun universe).
+        A failed call keeps the previous list. Never raises."""
+        if self.stalkchain is None or not stalkchain.ENTRIES_MIN or now - self._entries_at < stalkchain.ENTRIES_MIN * 60:
+            return
+        self._entries_at = now
+        try:
+            raw = self.stalkchain.multi_trader_entries(windowMinutes=60, minTraders=3, side="buy", chain="solana", limit=20)
+            if raw is None:
+                return
+            rows = stalkchain.summarize_entries(raw)
+            track = getattr(self.market, "track", None)
+            for e in rows:
+                if track and not self.market.get(e["mint"]):
+                    e["tracked"] = track(e["mint"], source="copy", held=self.held()) is not None
+            self.smart_entries = rows
+        except Exception as e:
+            print(f"[arena] StalkChain smart-money entries failed: {e}")
+
+    def smart_entries_view(self, now):
+        """smart_entries for a Claude's look: newest first, with minutes since the first and last trader bought."""
+        def ago(ts):
+            return round((now - ts) / 60, 1) if ts else None
+        return [{"token": e["mint"], "symbol": e.get("symbol") or (self.market.get(e["mint"]) or {}).get("symbol"),
+                 "traders": e.get("traders"), "first_entry_min_ago": ago(e.get("first_ts")),
+                 "last_entry_min_ago": ago(e.get("last_ts"))} for e in self.smart_entries]
 
     def _recent_buys(self, name, now):
         """(timestamps of the agent's filled buys in the last 24 hours, oldest first; number of buys queued for the next fill)."""
@@ -1366,6 +1466,7 @@ class Arena:
                 self.execute(name, o, now)
             self.record_prices(now)
             self.update_signals(now)
+            self.poll_smart_entries(now)
             if self.memory:
                 self.memory.observe(now, self.market.candidates())
             self.check_exits(now)

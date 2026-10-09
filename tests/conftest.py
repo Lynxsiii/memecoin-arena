@@ -9,6 +9,9 @@ os.environ.setdefault("ARENA_PUMPFUN", "0")
 # ...and no LiveMarket test reaches the real GeckoTerminal through the price fallback when its fake DexScreener
 # leaves tokens unpriced (test_gecko_fallback.py turns it on with fake GeckoTerminal answers).
 os.environ.setdefault("ARENA_GECKO_FALLBACK", "0")
+# ...and no test ever spends StalkChain credits, even after main.py's load_dotenv() reads a real key from .env
+# (load_dotenv only fills unset variables; test_stalkchain.py injects fake clients).
+os.environ["ARENA_STALKCHAIN_KEY"] = ""
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:

@@ -69,6 +69,9 @@ API
       RAMP_MIN_BUYERS or more buying wallets; without pool-feed flow: buys_h1 > sells_h1 and buys_h1 >=
       RAMP_MIN_BUYERS, transaction counts standing in for wallets), no veto and no chart tell. `prices` is the
       arena's 30-second price history [(ts, price), ...] for chart_tell().
+  stalkchain_verdict(summaries, rug_veto=2, sniped_flag_pct=40.0) -> {"veto", "flags", "view"}
+      The arena's pre-buy verdict from StalkChain lookups (stalkchain.py): a deployer rug history is a veto, heavy
+      sniping / a bundled launch / early buyers gone / wash volume are flags; view is shown as structure.stalkchain.
   curve_pace(curve_pct, chg) -> float | None
       Curve fill over the last 10 minutes from a chg_since entry (curve_pct_10m, curve_pct_10m_secs); a coin
       tracked under 10 minutes gets its fill since tracking began scaled to a 10-minute pace; None without a
@@ -858,3 +861,42 @@ def structural_view(token, flow, liq_trend, migrated_min_ago, creator_sold_usd, 
         out["vetoes"] = rep["vetoes"]
     return out
 
+
+
+def stalkchain_verdict(summaries, rug_veto=2, sniped_flag_pct=40.0):
+    """What the StalkChain pre-buy lookups (stalkchain.prebuy: {"deployer": ..., "early_buyers": ..., "quality": ...})
+    say about a coin: {"veto": reason | None, "flags": [...], "view": {...}}. Veto: the deployer's earlier launches
+    include `rug_veto` or more dead/rugged ones, or at least half of 2+ earlier launches died (a rug history is a hard
+    no). Flags (never a veto): snipers took sniped_flag_pct % or more of the supply; a bundled launch; most early
+    buyers already sold; mostly wash-traded volume. view: the compact numbers shown to the Claudes as
+    structure.stalkchain (only keys with data). Missing data is never a veto."""
+    s = summaries or {}
+    dep, eb, q = s.get("deployer") or {}, s.get("early_buyers") or {}, s.get("quality") or {}
+    view, flags, veto = {}, [], None
+    launched, rugged, rate = dep.get("launched"), dep.get("rugged"), dep.get("rug_rate")
+    for k_out, k_in, src in (("deployer_launches", "launched", dep), ("deployer_rugged", "rugged", dep),
+                             ("deployer_graduated", "graduated", dep), ("deployer_rug_rate", "rug_rate", dep),
+                             ("sniped_pct", "sniped_pct", eb), ("bundled", "bundled", eb), ("bundle_pct", "bundle_pct", eb),
+                             ("early_buyers_sold_pct", "early_buyers_sold_pct", eb), ("wash_pct", "wash_pct", q),
+                             ("verified", "verified", q)):
+        if src.get(k_in) is not None:
+            view[k_out] = src[k_in]
+    if rugged is not None and (rugged >= rug_veto or (rate is not None and rate >= 0.5 and (launched or 0) >= 2)):
+        veto = f"the deployer rugged {rugged} of {launched} earlier launches" if launched else \
+            f"the deployer rugged {rugged} earlier launches"
+    sniped = eb.get("sniped_pct")
+    if sniped is not None and sniped >= sniped_flag_pct:
+        flags.append(f"{sniped:g}% of supply sniped at launch")
+    if eb.get("bundled"):
+        flags.append("bundled launch" + (f" ({eb['bundle_pct']:g}% of supply)" if eb.get("bundle_pct") is not None else ""))
+    sold = eb.get("early_buyers_sold_pct")
+    if sold is not None and sold >= 80:
+        flags.append(f"{sold:g}% of the early buyers already sold")
+    wash = q.get("wash_pct")
+    if wash is not None and wash >= 70:
+        flags.append(f"{wash:g}% of volume is not organic (wash trading)")
+    if flags:
+        view["flags"] = flags
+    if veto:
+        view["veto"] = veto
+    return {"veto": veto, "flags": flags, "view": view}

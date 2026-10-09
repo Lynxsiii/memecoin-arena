@@ -11,6 +11,7 @@ import time
 import exchange
 import market
 import signals as sig
+import stalkchain
 from agent_base import Agent
 
 # The brief every Claude gets. It is IDENTICAL for every model so the model comparison stays fair; personas only
@@ -74,7 +75,7 @@ Playbook (what the data means; you decide what to do with it):
   graduate carrying $80k+ of liquidity died within an hour; a real migration brings about $12k, so a huge pool minutes
   after graduation is injected liquidity waiting to be pulled. The arena now vetoes both. Treat a famous name or an
   oversized pool as the rug tell, not as strength.
-- Flow: real demand is net money coming in from many wallets while the price holds; sells catching up while the price
+{STALKCHAIN_PLAYBOOK_TEXT}- Flow: real demand is net money coming in from many wallets while the price holds; sells catching up while the price
   stalls is distribution and often precedes a drop.
 - Liquidity vs mcap: thin liquidity relative to market cap means a few sellers move the price a lot and your own exit has
   impact; deeper is safer.
@@ -161,7 +162,7 @@ What each look shows you:
   share that beat the round-trip cost). null until the arena has about an hour of data.
 - smart_money: what the arena's top-100 traders (ranked by profit over the last two days, bots filtered out) bought and
   sold in the last 30 minutes. Copying them blindly loses money after costs and delays; it is one input among many.
-- scoreboard: every agent's points right now. your_score: your points, rank and lives. strategy_room: the newest posts.
+{STALKCHAIN_LOOK_TEXT}- scoreboard: every agent's points right now. your_score: your points, rank and lives. strategy_room: the newest posts.
   woken_early_because: why you were called early, if you were.
 
 Rules:
@@ -257,6 +258,25 @@ def graduate_cap_text(ar):
             f"  was 22 buys for +$506). Curve buys are not capped.\n")
 
 
+# Only in the brief when StalkChain is on (ARENA_STALKCHAIN_KEY set: stalkchain.shared() is a client).
+STALKCHAIN_LOOK_TEXT = """- smart_entries: coins that 3 or more of StalkChain's tracked traders bought within the same hour, newest first, with
+  how many traders and how many minutes ago the first and the last of them bought. The arena adds those coins to its
+  lists. It is a lead to check, not a signal to copy: the same costs and delays as smart_money apply.
+"""
+STALKCHAIN_PLAYBOOK_TEXT = """- StalkChain: before your first buy of a coin the arena looks up who deployed it and who its first buyers were; the
+  answer shows on later looks as structure.stalkchain. A deployer whose earlier launches died (deployer_rugged,
+  deployer_rug_rate) is a hard no: the buy is refused and the coin is vetoed. Heavy sniping (sniped_pct), a bundled
+  launch (bundled) or early buyers already gone (early_buyers_sold_pct) are flags to weigh, not vetoes.
+"""
+
+
+def stalkchain_texts():
+    """(look bullet, playbook line) for the brief: empty strings when StalkChain is off."""
+    if stalkchain.shared() is None:
+        return "", ""
+    return STALKCHAIN_LOOK_TEXT, STALKCHAIN_PLAYBOOK_TEXT
+
+
 def fill_brief(text, min_check, max_check):
     """Fill the brief's placeholders: look interval, journal size, fees and costs, lives and the bust line."""
     import arena as _ar  # the moonshot and runner settings live with the rules that enforce them
@@ -266,6 +286,8 @@ def fill_brief(text, min_check, max_check):
     text = text.replace("{BUY_RATION_TEXT}", buy_ration_text(_ar))
     text = text.replace("{HARD_STOP_TEXT}", hard_stop_text(_ar))
     text = text.replace("{GRAD_CAP_TEXT}", graduate_cap_text(_ar))
+    sc_look, sc_play = stalkchain_texts()
+    text = text.replace("{STALKCHAIN_LOOK_TEXT}", sc_look).replace("{STALKCHAIN_PLAYBOOK_TEXT}", sc_play)
     text = text.replace("{RAMP_MIN}", f"{sig.RAMP_MIN_PCT:g}").replace("{RAMP_MAX}", f"{sig.RAMP_MAX_PCT:g}")
     lives = max(1, int(os.environ.get("ARENA_LIVES", "3") or 3))
     bust = float(os.environ.get("ARENA_BUST_PCT", "10") or 10)
@@ -712,6 +734,7 @@ class LLMAgent(Agent):
             **({"vetoed_count": len(vetoed)} if vetoed else {}),
             "market_memory": v.get("market_memory"),
             "smart_money": v.get("smart_money"),
+            **({"smart_entries": v["smart_entries"]} if "smart_entries" in v else {}),  # StalkChain on only
             "measured_round_trip_cost_pct": v.get("measured_round_trip_cost_pct"),
             **({"arena_news": v["arena_news"]} if v.get("arena_news") else {}),
             "recent_closed": [{k: r[k] for k in ("symbol", "pnl_usd", "pnl_pct", "reason")} for r in v.get("recent_closed", [])],
