@@ -66,13 +66,10 @@ What the arena does for you:
 
 Playbook (what the data means; you decide what to do with it):
 - Ramp: {CURVE_CAP_TEXT}
-  On the run-8 recordings the only entry that paid was buying a curve coin in mid-fill with net buying from
-  many wallets and selling at graduation or a -30% stop; coins that reach half the curve graduate about half the time,
-  and the curve's own math lifts the price into graduation. In run 9 the ramp wins were entries at 69% and 46% filled
-  that graduated within two minutes, and every loss was an entry at 40-52% that stalled (those run-8 and run-9
-  percentages, and the replay's, were measured against an old fixed dollar cap and read about 1.4x higher on
-  today's scale), so the ramp is now
-  {RAMP_MIN}-{RAMP_MAX}% filled (the replay averaged +46% entering at 60%, +12% at 50%, +7% at 40%). Dip-buys,
+  On a replay of 1,630 curve coins measured on this scale, buying at 35-55% and selling everything at
+  graduation averaged +4.5% (+6.2% with a -20% stop), buying at 45-65% averaged -5.7%, and holding through
+  graduation lost, so the ramp is now
+  {RAMP_MIN}-{RAMP_MAX}% filled and the curve's own math lifts the price into graduation. Dip-buys,
   chasing fast fills and buying at first sight all lost after costs. ramp_setup marks coins in that window.
 - Rugs that look strong: last night every brand-name coin (ChatGPT, Apple, NVIDIA, Tesla, Nike...) and every fresh
   graduate carrying $80k+ of liquidity died within an hour; a real migration brings about $12k, so a huge pool minutes
@@ -289,11 +286,11 @@ def _ride_left_pct(pct):
 
 def curve_cap_text(cap_usd=None):
     """The brief's curve_pct sentence. The dollar figure is the live graduation cap (market.graduation_cap_usd() at
-    the last SOL price a market saw, rounded to $1,000 so the brief, and the prompt cache, change only when SOL
-    moves ~2%); before any SOL price exists it says "about $47k"."""
+    the last SOL price a market saw, rounded to $5,000 so the brief, and the prompt cache, change only when SOL
+    moves ~$12); before any SOL price exists it says "about $47k"."""
     if cap_usd is None and market.live_sol_usd() > 0:
         cap_usd = market.graduation_cap_usd()
-    money = f"roughly ${round(cap_usd, -3):,.0f}" if cap_usd else "about $47k"
+    money = f"roughly ${round(cap_usd / 5000) * 5000:,.0f}" if cap_usd else "about $47k"
     lo, hi = sig.RAMP_MIN_PCT, sig.RAMP_MAX_PCT
     ride = (f"from {lo:g}% a coin that graduates has about +{_ride_left_pct(lo)}% of price left to migration, "
             f"from {hi:g}% about +{_ride_left_pct(hi)}%, before your costs") if 0 < lo < hi <= 100 else "before your costs"
@@ -348,8 +345,10 @@ PERSONAS = {
                    "You do not wait for an hour-old calm coin; that is not your style. On any look where you hold nothing, buy the best ramp_setup or fresh graduate with net buying, size it to the pool, set a stop, and move on. Most of these lose; the one that runs is the point."),
     "ramp": ("Ramp", "Your style: ramp trader. You buy bonding-curve coins while their fill is {RAMP_MIN}-{RAMP_MAX}% (ramp_setup) with net "
                      "buying from many wallets and no bundle tells, and you cash out at graduation: put \"sell_at_graduation\": true on the "
-                     "buy so the arena sells the moment the coin migrates. Stop -30%. Prefer the most-filled setup on screen; an "
-                     "entry that is still 45-55% filled needs to keep filling, so stop at -30% and move on if it stalls. "
+                     "buy so the arena sells the moment the coin migrates. Set \"stop_loss_pct\": -20 on every ramp buy: on the "
+                     "replay a -20% stop beat -30% on the curve, because a ramp that stalls rarely recovers. Prefer the "
+                     "most-filled setup on screen; an entry near {RAMP_MIN}% filled needs to keep filling, so let the -20% "
+                     "stop cut it and move on if it stalls. "
                      "You skip coins already past {RAMP_MAX}%, coins with a "
                      "straight-green-run chart, and anything the vetoes flag. Several ramps a day beat one home run."),
     "skeptic": ("Skeptic", "Your style: skeptic. You trade graduates only, never the bonding curve. You assume every coin is a rug until its "
@@ -720,7 +719,7 @@ class LLMAgent(Agent):
 
     def _refresh_cap_text(self):
         """Keep the brief's graduation-cap dollar figure live: the brief is filled before the market's first SOL
-        price, so swap in the current sentence whenever it changes (rounded to $1,000, so rarely)."""
+        price, so swap in the current sentence whenever it changes (rounded to $5,000, so rarely)."""
         old, new = getattr(self, "_cap_text", None), curve_cap_text()
         if not old or new == old:
             return

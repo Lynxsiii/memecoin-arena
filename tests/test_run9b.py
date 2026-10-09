@@ -77,26 +77,30 @@ def _view(t, flow=None):
 
 # ------------------------------------------------------------------ 1. ramp window
 def test_ramp_window_bounds():
-    assert signals.RAMP_MIN_PCT == 45.0 and signals.RAMP_MAX_PCT == 75.0
-    assert "ramp_setup" not in _view(_curve(44.0), _flow())
-    assert _view(_curve(45.0), _flow())["ramp_setup"] is True
-    assert _view(_curve(75.0), _flow())["ramp_setup"] is True
-    assert "ramp_setup" not in _view(_curve(76.0), _flow())
-    assert [signals.ramp_stage(p) for p in (44.9, 45.0, 75.0, 75.1)] == ["early", "ramp", "ramp", "late"]
+    assert signals.RAMP_MIN_PCT == 35.0 and signals.RAMP_MAX_PCT == 55.0
+    assert "ramp_setup" not in _view(_curve(34.0), _flow())
+    assert _view(_curve(35.0), _flow())["ramp_setup"] is True
+    assert _view(_curve(55.0), _flow())["ramp_setup"] is True
+    assert "ramp_setup" not in _view(_curve(56.0), _flow())
+    assert [signals.ramp_stage(p) for p in (34.9, 35.0, 55.0, 55.1)] == ["early", "ramp", "ramp", "late"]
 
 
 def test_brief_and_personas_use_new_window(monkeypatch):
     monkeypatch.setattr(market, "UNIVERSE", "pumpfun")
     b = fill_brief(LLM_SYSTEM, 1, 60)
-    assert '"ramp" 45-75%, "late" past 75%' in b and "under 45% filled" in b
-    assert "ramp is now\n  45-75% filled" in b
-    assert "ramp_setup coins first (45-75% filled with net buying; most filled first)" in b
+    assert '"ramp" 35-55%, "late" past 55%' in b and "under 35% filled" in b
+    assert "ramp is now\n  35-55% filled" in b
+    assert "ramp_setup coins first (35-55% filled with net buying; most filled first)" in b
+    assert "averaged +4.5% (+6.2% with a -20% stop), buying at 45-65% averaged -5.7%" in b
+    for old in ("69% and 46%", "40-52%", "+46% entering at 60%", "1.4x"):
+        assert old not in b  # no old-scale figures left in the brief
     ramp = fill_brief(LLM_SYSTEM + "\n\n" + PERSONAS["ramp"][1], 1, 60)
-    assert "while their fill is 45-75% (ramp_setup)" in ramp and "already past 75%" in ramp
-    assert ("Prefer the most-filled setup on screen; an entry that is still 45-55% filled needs to keep filling, "
-            "so stop at -30% and move on if it stalls.") in ramp
+    assert "while their fill is 35-55% (ramp_setup)" in ramp and "already past 55%" in ramp
+    assert ('Set "stop_loss_pct": -20 on every ramp buy: on the replay a -20% stop beat -30% on the curve, because a '
+            "ramp that stalls rarely recovers.") in ramp
+    assert "an entry near 35% filled needs to keep filling" in ramp
     runner = fill_brief(PERSONAS["runner"][1], 1, 60)
-    assert "never buy past 75% of the curve" in runner
+    assert "never buy past 55% of the curve" in runner
     for text in [b, ramp, runner] + [p[1] for p in PERSONAS.values()]:
         assert "40-80" not in text and "40-60" not in text and "past 80" not in text
     assert "{RAMP_" not in b and "{RAMP_" not in ramp
@@ -115,10 +119,10 @@ def test_max_tracked_defaults_and_env(monkeypatch):
 def test_probation_promotes_ramp_zone_without_volume(monkeypatch):
     hot, warm = _mint("H1pump"), _mint("W1pump")
     m = _market(monkeypatch, universe="pumpfun", launches=[_launch(hot, mcap_sol=31), _launch(warm, mcap_sol=31)],
-                pairs={hot: _pair(hot, mcap=21_250, vol_h1=0, txns=0), warm: _pair(warm, mcap=15_000, vol_h1=0, txns=0)})
+                pairs={hot: _pair(hot, mcap=21_250, vol_h1=0, txns=0), warm: _pair(warm, mcap=12_000, vol_h1=0, txns=0)})
     monkeypatch.setattr(market, "TRACK_MCAP_USD", 50_000)  # only the ramp rule can promote these two
     assert market.TRACK_RAMP_MCAP_USD is None  # unset: the floor is RAMP_MIN_PCT % of the live cap
-    m.sol = {"price": 100.0}  # cap 425 SOL x $100 = $42,500; floor 45% = $19,125
+    m.sol = {"price": 100.0}  # cap 425 SOL x $100 = $42,500; floor 35% = $14,875
     assert m.graduation_cap_usd() == 42_500
     assert m._probation_poll(now=_NOW) == {hot: "pumpfun"}
     assert warm in m.probation
@@ -148,7 +152,7 @@ def test_eviction_protects_ramp_zone_curve_coin(monkeypatch):
         "R60pump": {"address": "R60pump", "price": 5, "high": 5, "source": "pumpfun", "dex": "pumpfun",
                     "first_seen": 1, "pump": {"curve_pct": 60.0}},
         "R40pump": {"address": "R40pump", "price": 5, "high": 5, "source": "pumpfun", "dex": "pumpfun",
-                    "first_seen": 2, "pump": {"curve_pct": 40.0}},
+                    "first_seen": 2, "pump": {"curve_pct": 30.0}},
         "GRADpump": {"address": "GRADpump", "price": 5, "high": 5, "source": "graduated", "dex": "pumpswap",
                      "first_seen": 3, "pump": {"curve_pct": 100.0, "graduated": 1}},
         "NEWpump": {"address": "NEWpump", "price": 5, "high": 5, "source": "pumpfun", "dex": "pumpfun",
@@ -162,7 +166,7 @@ def test_eviction_protects_ramp_zone_curve_coin(monkeypatch):
     # the protection is refreshed while the coin stays in the zone, and lapses 30 minutes after it leaves
     m._evict(held=set(), now=_NOW + 600)
     assert m.tokens["R60pump"]["protect_until"] == _NOW + 2400
-    m.tokens["R60pump"]["pump"]["curve_pct"] = 40.0
+    m.tokens["R60pump"]["pump"]["curve_pct"] = 30.0
     m._evict(held=set(), now=_NOW + 1200)
     assert m.tokens["R60pump"]["protect_until"] == _NOW + 2400
 
@@ -320,17 +324,17 @@ def test_annotate_uses_the_market_cap_passed():
 
 def test_promotion_floor_follows_live_cap(monkeypatch):
     coin = _mint("F1pump")
-    pairs = {coin: _pair(coin, mcap=21_000, vol_h1=0, txns=0)}
+    pairs = {coin: _pair(coin, mcap=16_000, vol_h1=0, txns=0)}
     monkeypatch.setattr(market, "TRACK_MCAP_USD", 50_000)
     cheap = _market(monkeypatch, universe="pumpfun", launches=[_launch(coin, mcap_sol=31)], pairs=pairs)
-    cheap.sol = {"price": 100.0}  # floor 45% of $42,500 = $19,125: $21k promotes
+    cheap.sol = {"price": 100.0}  # floor 35% of $42,500 = $14,875: $16k promotes
     assert cheap._probation_poll(now=_NOW) == {coin: "pumpfun"}
     dear = _market(monkeypatch, universe="pumpfun", launches=[_launch(coin, mcap_sol=31)], pairs=pairs)
-    dear.sol = {"price": 160.0}  # floor 45% of $68,000 = $30,600: $21k stays on probation
+    dear.sol = {"price": 160.0}  # floor 35% of $68,000 = $23,800: $16k stays on probation
     assert dear._probation_poll(now=_NOW) == {} and coin in dear.probation
     override = _market(monkeypatch, universe="pumpfun", launches=[_launch(coin, mcap_sol=31)], pairs=pairs)
     override.sol = {"price": 100.0}
-    monkeypatch.setattr(market, "TRACK_RAMP_MCAP_USD", 25_000.0)  # ARENA_PUMPFUN_TRACK_RAMP_MCAP_USD: absolute dollars
+    monkeypatch.setattr(market, "TRACK_RAMP_MCAP_USD", 20_000.0)  # ARENA_PUMPFUN_TRACK_RAMP_MCAP_USD: absolute dollars
     assert override._probation_poll(now=_NOW) == {}
 
 
@@ -350,8 +354,8 @@ def test_brief_explains_curve_pct_with_live_cap(monkeypatch):
     b = fill_brief(LLM_SYSTEM, 1, 60)
     assert "share of the graduation cap" in b
     assert ("curve_pct is the coin's market cap as a share of the graduation cap (about 425 SOL, about $47k at the "
-            "current SOL price); from 45% a coin that graduates has about +120% of price left to migration, from 75% "
-            "about +33%, before your costs.") in b
+            "current SOL price); from 35% a coin that graduates has about +190% of price left to migration, from 55% "
+            "about +82%, before your costs.") in b
     assert "{CURVE_CAP_TEXT}" not in b
 
     class _Backend:
@@ -359,7 +363,11 @@ def test_brief_explains_curve_pct_with_live_cap(monkeypatch):
 
     agent = claude_agents.LLMAgent(_Backend())
     assert "about 425 SOL, about $47k at the current SOL price" in agent.system
-    monkeypatch.setattr(market, "_last_sol_usd", 116.0)  # 425 x 116 = $49,300 -> "roughly $49,000"
+    monkeypatch.setattr(market, "_last_sol_usd", 116.0)  # 425 x 116 = $49,300 -> "roughly $50,000"
     agent._refresh_cap_text()
-    assert "about 425 SOL, roughly $49,000 at the current SOL price" in agent.system
+    assert "about 425 SOL, roughly $50,000 at the current SOL price" in agent.system
+    monkeypatch.setattr(market, "_last_sol_usd", 120.0)  # $51,000: same $5,000 bucket, brief unchanged
+    before = agent.system
+    agent._refresh_cap_text()
+    assert agent.system == before
     assert "about $47k" not in agent.system

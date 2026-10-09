@@ -68,7 +68,7 @@ Discovery (where tracked tokens come from; every token carries `source` and `fir
   its high), then the oldest free token of whichever group is furthest over its share (among pump.fun tokens,
   launches before graduations). Held tokens and tokens protected by track() are never evicted, and neither (run 9b)
   is a curve coin in the ramp zone: a tracked curve coin with pump.curve_pct >= the ramp floor (signals.RAMP_MIN_PCT,
-  ARENA_RAMP_MIN=45) gets protect_until = now + 30 minutes, refreshed on every eviction pass while it stays there.
+  ARENA_RAMP_MIN=35) gets protect_until = now + 30 minutes, refreshed on every eviction pass while it stays there.
   ARENA_DISCOVERY=both          dexscreener | geckoterminal | both: which discovery feeds to use.
   ARENA_ORGANIC_SHARE=0.5       share of the non-pump.fun slots kept for organic tokens (0 = promoted only,
                                 1 = organic only).
@@ -120,7 +120,7 @@ Discovery (where tracked tokens come from; every token carries `source` and `fir
                                 least 40 1h buys + sells).
   ARENA_PUMPFUN_TRACK_RAMP_MCAP_USD   pumpfun universe: market cap in dollars that promotes a launch on sight,
                                 whatever its volume. Unset (default): the ramp floor, RAMP_MIN_PCT % of the live
-                                graduation_cap_usd(), computed at each poll (~$22k at 45% with SOL ~ $115). Set: a
+                                graduation_cap_usd(), computed at each poll (~$17k at 35% with SOL ~ $115). Set: a
                                 fixed dollar floor instead; 0 disables the rule.
 
 Force-tracking: LiveMarket.track(mint, source="copy", hold_secs=21600, held=()) adds a token the feeds have not
