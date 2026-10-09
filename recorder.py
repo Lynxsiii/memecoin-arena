@@ -22,6 +22,10 @@ fields that disappeared. Floats are rounded to 6 significant digits; keys starti
 internals) and "updated" (the fetch time) are dropped. replay.iter_snapshots() turns this back into the
 full token dicts the arena saw.
 
+pump.curve_pct scale: recordings made before 2026-10-09 carry curve_pct = mcap / a fixed $69,000; from then on it
+is mcap / the live graduation cap (425 SOL x the SOL price, market.graduation_cap_usd()), about 1.4x higher at
+SOL ~ $115. To compare old files, recompute it from mcap and the snapshot's "sol" price.
+
 Disk use: live data runs about 2-6 MB per day (60 tokens, one snapshot every 30 s); a mock market, where
 every number changes every tick, is the worst case at roughly 10 MB per day.
 """

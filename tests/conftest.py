@@ -12,6 +12,10 @@ os.environ.setdefault("ARENA_GECKO_FALLBACK", "0")
 # ...and no test ever spends StalkChain credits, even after main.py's load_dotenv() reads a real key from .env
 # (load_dotenv only fills unset variables; test_stalkchain.py injects fake clients).
 os.environ["ARENA_STALKCHAIN_KEY"] = ""
+# ...and the live .env's ramp / graduation-cap tuning never leaks into the tests (main.py's load_dotenv() runs at
+# collection and a test that reloads signals.py would pick it up): blank means "use the default".
+for _k in ("ARENA_RAMP_MIN", "ARENA_RAMP_MAX", "ARENA_GRADUATION_CAP_SOL", "ARENA_PUMPFUN_TRACK_RAMP_MCAP_USD"):
+    os.environ[_k] = ""
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:

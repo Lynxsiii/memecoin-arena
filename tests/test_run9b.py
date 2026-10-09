@@ -1,4 +1,4 @@
-"""Run 9b: ramp window 55-85%, 500 tracked slots with ramp-zone promotion and protection, $100 graduate buy cap,
+"""Run 9b: ramp window (45-75% of the true graduation cap since 2026-10-09), 500 tracked slots with ramp-zone promotion and protection, $100 graduate buy cap,
 slow-tick print."""
 import arena as arena_mod
 import market
@@ -77,26 +77,26 @@ def _view(t, flow=None):
 
 # ------------------------------------------------------------------ 1. ramp window
 def test_ramp_window_bounds():
-    assert signals.RAMP_MIN_PCT == 55.0 and signals.RAMP_MAX_PCT == 85.0
-    assert "ramp_setup" not in _view(_curve(50.0), _flow())
-    assert _view(_curve(55.0), _flow())["ramp_setup"] is True
-    assert _view(_curve(85.0), _flow())["ramp_setup"] is True
-    assert "ramp_setup" not in _view(_curve(86.0), _flow())
-    assert [signals.ramp_stage(p) for p in (54.9, 55.0, 85.0, 85.1)] == ["early", "ramp", "ramp", "late"]
+    assert signals.RAMP_MIN_PCT == 45.0 and signals.RAMP_MAX_PCT == 75.0
+    assert "ramp_setup" not in _view(_curve(44.0), _flow())
+    assert _view(_curve(45.0), _flow())["ramp_setup"] is True
+    assert _view(_curve(75.0), _flow())["ramp_setup"] is True
+    assert "ramp_setup" not in _view(_curve(76.0), _flow())
+    assert [signals.ramp_stage(p) for p in (44.9, 45.0, 75.0, 75.1)] == ["early", "ramp", "ramp", "late"]
 
 
 def test_brief_and_personas_use_new_window(monkeypatch):
     monkeypatch.setattr(market, "UNIVERSE", "pumpfun")
     b = fill_brief(LLM_SYSTEM, 1, 60)
-    assert '"ramp" 55-85%, "late" past 85%' in b and "under 55% filled" in b
-    assert "ramp is now\n  55-85% filled" in b
-    assert "ramp_setup coins first (55-85% filled with net buying; most filled first)" in b
+    assert '"ramp" 45-75%, "late" past 75%' in b and "under 45% filled" in b
+    assert "ramp is now\n  45-75% filled" in b
+    assert "ramp_setup coins first (45-75% filled with net buying; most filled first)" in b
     ramp = fill_brief(LLM_SYSTEM + "\n\n" + PERSONAS["ramp"][1], 1, 60)
-    assert "while their fill is 55-85% (ramp_setup)" in ramp and "already past 85%" in ramp
-    assert ("Prefer the most-filled setup on screen; an entry that is still 55-65% filled needs to keep filling, "
+    assert "while their fill is 45-75% (ramp_setup)" in ramp and "already past 75%" in ramp
+    assert ("Prefer the most-filled setup on screen; an entry that is still 45-55% filled needs to keep filling, "
             "so stop at -30% and move on if it stalls.") in ramp
     runner = fill_brief(PERSONAS["runner"][1], 1, 60)
-    assert "never buy past 85% of the curve" in runner
+    assert "never buy past 75% of the curve" in runner
     for text in [b, ramp, runner] + [p[1] for p in PERSONAS.values()]:
         assert "40-80" not in text and "40-60" not in text and "past 80" not in text
     assert "{RAMP_" not in b and "{RAMP_" not in ramp
@@ -115,14 +115,16 @@ def test_max_tracked_defaults_and_env(monkeypatch):
 def test_probation_promotes_ramp_zone_without_volume(monkeypatch):
     hot, warm = _mint("H1pump"), _mint("W1pump")
     m = _market(monkeypatch, universe="pumpfun", launches=[_launch(hot, mcap_sol=31), _launch(warm, mcap_sol=31)],
-                pairs={hot: _pair(hot, mcap=38_000, vol_h1=0, txns=0), warm: _pair(warm, mcap=30_000, vol_h1=0, txns=0)})
+                pairs={hot: _pair(hot, mcap=21_250, vol_h1=0, txns=0), warm: _pair(warm, mcap=15_000, vol_h1=0, txns=0)})
     monkeypatch.setattr(market, "TRACK_MCAP_USD", 50_000)  # only the ramp rule can promote these two
-    assert round(market.TRACK_RAMP_MCAP_USD) == 37950
+    assert market.TRACK_RAMP_MCAP_USD is None  # unset: the floor is RAMP_MIN_PCT % of the live cap
+    m.sol = {"price": 100.0}  # cap 425 SOL x $100 = $42,500; floor 45% = $19,125
+    assert m.graduation_cap_usd() == 42_500
     assert m._probation_poll(now=_NOW) == {hot: "pumpfun"}
     assert warm in m.probation
     assert m.probation_stats["promoted_ramp"] == 1
     t = m._new_token(hot, "pumpfun", _NOW)
-    assert t["pump"]["curve_pct"] == 55.1  # from DexScreener's market cap, before the first price refresh
+    assert t["pump"]["curve_pct"] == 50.0  # from DexScreener's market cap, before the first price refresh
     m.max_tracked = 1
     m.tokens = {"OLDpump": {"address": "OLDpump", "price": 1, "high": 1, "source": "pumpfun", "first_seen": 1}, hot: t}
     t["first_seen"] = 0  # even as the oldest launch it stays: the ramp zone protects it
@@ -160,7 +162,7 @@ def test_eviction_protects_ramp_zone_curve_coin(monkeypatch):
     # the protection is refreshed while the coin stays in the zone, and lapses 30 minutes after it leaves
     m._evict(held=set(), now=_NOW + 600)
     assert m.tokens["R60pump"]["protect_until"] == _NOW + 2400
-    m.tokens["R60pump"]["pump"]["curve_pct"] = 50.0
+    m.tokens["R60pump"]["pump"]["curve_pct"] = 40.0
     m._evict(held=set(), now=_NOW + 1200)
     assert m.tokens["R60pump"]["protect_until"] == _NOW + 2400
 
@@ -289,3 +291,75 @@ def test_poll_priority_held_then_ramp_then_rest(monkeypatch):
         tr.pools[pool]["due"] = now + 60  # what _poll_pool does
     assert polled == ["poolHeld", "poolRamp", "poolPlain", "poolGrad"]
     assert tr._next_pool(now) is None
+
+
+# ------------------------------------------------------------------ 2026-10-09: graduation cap in SOL
+def test_graduation_cap_uses_live_sol_and_falls_back(monkeypatch):
+    import exchange
+    monkeypatch.setattr(market, "GRADUATION_CAP_SOL", 425.0)
+    monkeypatch.setattr(market, "_last_sol_usd", 0.0)
+    monkeypatch.setattr(exchange, "SOL_USD", 150.0)
+    assert market.graduation_cap_usd() == 425 * 150  # no live price yet: ARENA_SOL_USD
+    assert market.graduation_cap_usd(116.0) == 425 * 116
+    m = _market(monkeypatch, universe="pumpfun")
+    assert m.graduation_cap_usd() == 425 * 150  # LiveMarket before its first SOL price
+    m.sol = {"price": 110.0}
+    assert m.graduation_cap_usd() == 425 * 110
+    market._note_sol_price(112.0)  # what LiveMarket.refresh does once DexScreener prices SOL
+    assert market.live_sol_usd() == 112.0 and market.graduation_cap_usd() == 425 * 112
+
+
+def test_annotate_uses_the_market_cap_passed():
+    t = {"price": 1e-6, "liquidity": 5000, "mcap": 25_000, "source": "pumpfun", "dex": "pumpfun", "pump": {}}
+    market._annotate(t, cap_usd=50_000)
+    assert t["pump"]["curve_pct"] == 50.0
+    g = {"price": 1e-6, "mcap": 99_000, "source": "graduated", "dex": "pumpswap", "pump": {"graduated": 1}}
+    market._annotate(g, cap_usd=50_000)
+    assert g["pump"]["curve_pct"] == 100.0
+
+
+def test_promotion_floor_follows_live_cap(monkeypatch):
+    coin = _mint("F1pump")
+    pairs = {coin: _pair(coin, mcap=21_000, vol_h1=0, txns=0)}
+    monkeypatch.setattr(market, "TRACK_MCAP_USD", 50_000)
+    cheap = _market(monkeypatch, universe="pumpfun", launches=[_launch(coin, mcap_sol=31)], pairs=pairs)
+    cheap.sol = {"price": 100.0}  # floor 45% of $42,500 = $19,125: $21k promotes
+    assert cheap._probation_poll(now=_NOW) == {coin: "pumpfun"}
+    dear = _market(monkeypatch, universe="pumpfun", launches=[_launch(coin, mcap_sol=31)], pairs=pairs)
+    dear.sol = {"price": 160.0}  # floor 45% of $68,000 = $30,600: $21k stays on probation
+    assert dear._probation_poll(now=_NOW) == {} and coin in dear.probation
+    override = _market(monkeypatch, universe="pumpfun", launches=[_launch(coin, mcap_sol=31)], pairs=pairs)
+    override.sol = {"price": 100.0}
+    monkeypatch.setattr(market, "TRACK_RAMP_MCAP_USD", 25_000.0)  # ARENA_PUMPFUN_TRACK_RAMP_MCAP_USD: absolute dollars
+    assert override._probation_poll(now=_NOW) == {}
+
+
+def test_mock_market_curve_pct_on_live_cap():
+    m = market.MockMarket(n=9, seed=3)
+    cap = m.graduation_cap_usd()
+    assert cap == market.GRADUATION_CAP_SOL * m.sol["price"]
+    curve = [t for t in m.tokens.values() if t.get("dex") == "pumpfun"]
+    assert curve and all(abs(t["pump"]["curve_pct"] - min(100.0, t["mcap"] / cap * 100)) < 0.06 for t in curve)
+    m.refresh(held=())
+    assert market.live_sol_usd() == m.sol["price"]
+
+
+def test_brief_explains_curve_pct_with_live_cap(monkeypatch):
+    import claude_agents
+    monkeypatch.setattr(market, "_last_sol_usd", 0.0)
+    b = fill_brief(LLM_SYSTEM, 1, 60)
+    assert "share of the graduation cap" in b
+    assert ("curve_pct is the coin's market cap as a share of the graduation cap (about 425 SOL, about $47k at the "
+            "current SOL price); from 45% a coin that graduates has about +120% of price left to migration, from 75% "
+            "about +33%, before your costs.") in b
+    assert "{CURVE_CAP_TEXT}" not in b
+
+    class _Backend:
+        model, label = "claude-sonnet-4-6", "test"
+
+    agent = claude_agents.LLMAgent(_Backend())
+    assert "about 425 SOL, about $47k at the current SOL price" in agent.system
+    monkeypatch.setattr(market, "_last_sol_usd", 116.0)  # 425 x 116 = $49,300 -> "roughly $49,000"
+    agent._refresh_cap_text()
+    assert "about 425 SOL, roughly $49,000 at the current SOL price" in agent.system
+    assert "about $47k" not in agent.system

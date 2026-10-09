@@ -81,12 +81,13 @@ def test_all_mode_state_keeps_candidates(monkeypatch):
 def test_brief_universe_text(monkeypatch):
     monkeypatch.setattr(market, "UNIVERSE", "pumpfun")
     pf = fill_brief(LLM_SYSTEM, 1, 60)
-    assert "graduates" in pf and "curve_pct" in pf and "$69k" in pf
+    assert "graduates" in pf and "curve_pct" in pf and "about 425 SOL" in pf and "$69k" not in pf
     assert "look every minute if the market calls for it" in pf and "from 1 to 60 minutes" in pf
     assert "{" + "UNIVERSE_TEXT}" not in pf
     monkeypatch.setattr(market, "UNIVERSE", "all")
     al = fill_brief(LLM_SYSTEM, 1, 60)
     assert "candidates: the busiest tokens" in al and "$69k" not in al
+    assert "share of the graduation cap" in al  # the Ramp playbook explains curve_pct in every universe
 
 
 def test_chg_since_reports_curve_pct_10m():

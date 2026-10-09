@@ -48,9 +48,17 @@ Discovery (where tracked tokens come from; every token carries `source` and `fir
     recently priced first) are priced on DexScreener each discover cycle (4 requests of 30), and one is tracked
     as soon as its market cap reaches ARENA_PUMPFUN_TRACK_MCAP_USD or its 1h volume ARENA_PUMPFUN_TRACK_VOL_USD
     with at least 40 1h transactions, or (run 9b, on sight, whatever its volume) its market cap reaches the ramp
-    zone, ARENA_PUMPFUN_TRACK_RAMP_MCAP_USD; the rest are forgotten. Every curve token carries pump.curve_pct
-    (market cap / the $69,000 graduation cap, 0-100; 100 once graduated) and every priced token `high` (highest
-    price seen).
+    zone, RAMP_MIN_PCT % of graduation_cap_usd() (or ARENA_PUMPFUN_TRACK_RAMP_MCAP_USD); the rest are forgotten.
+    Every curve token carries pump.curve_pct (market cap as a share of the graduation cap, 0-100; 100 once
+    graduated) and every priced token `high` (highest price seen).
+  Graduation cap (2026-10-09 fix): a pump.fun curve completes at a fixed market cap in SOL, GRADUATION_CAP_SOL
+    (about 425 SOL: the curve collects ~85 real SOL on top of its 30 virtual), so its dollar cap moves with SOL.
+    graduation_cap_usd() is GRADUATION_CAP_SOL x the market's live SOL price (LiveMarket.sol after a refresh,
+    MockMarket.sol), falling back to ARENA_SOL_USD (exchange.SOL_USD) before any SOL price exists; _annotate takes
+    it as cap_usd. Before this fix curve_pct was mcap / a fixed $69,000 (right at SOL ~ $160 only; at SOL ~ $115 a
+    coin showing 60% was really ~85% of the way), so curve_pct values recorded before 2026-10-09 (recordings,
+    arena.db looks and the dashboard history) are on that old scale: multiply by about 1.4 at SOL ~ $115.
+  ARENA_GRADUATION_CAP_SOL=425  market cap in SOL at which a pump.fun curve completes (for curve_pct).
   - "copy": force-tracked with LiveMarket.track() (a trader the arena follows just bought it).
   Every token also carries `sources`, the list of every tag it ever matched, in order; `source` is the first one
   (except promoted + organic -> "both", and pumpfun -> graduated).
@@ -60,7 +68,7 @@ Discovery (where tracked tokens come from; every token carries `source` and `fir
   its high), then the oldest free token of whichever group is furthest over its share (among pump.fun tokens,
   launches before graduations). Held tokens and tokens protected by track() are never evicted, and neither (run 9b)
   is a curve coin in the ramp zone: a tracked curve coin with pump.curve_pct >= the ramp floor (signals.RAMP_MIN_PCT,
-  ARENA_RAMP_MIN=55) gets protect_until = now + 30 minutes, refreshed on every eviction pass while it stays there.
+  ARENA_RAMP_MIN=45) gets protect_until = now + 30 minutes, refreshed on every eviction pass while it stays there.
   ARENA_DISCOVERY=both          dexscreener | geckoterminal | both: which discovery feeds to use.
   ARENA_ORGANIC_SHARE=0.5       share of the non-pump.fun slots kept for organic tokens (0 = promoted only,
                                 1 = organic only).
@@ -110,9 +118,10 @@ Discovery (where tracked tokens come from; every token carries `source` and `fir
   ARENA_PUMPFUN_TRACK_MCAP_USD=12000  pumpfun universe: market cap in dollars that promotes a launch.
   ARENA_PUMPFUN_TRACK_VOL_USD=8000    pumpfun universe: 1h volume in dollars that promotes a launch (with at
                                 least 40 1h buys + sells).
-  ARENA_PUMPFUN_TRACK_RAMP_MCAP_USD   pumpfun universe: market cap that promotes a launch on sight, whatever its
-                                volume; default the ramp floor, RAMP_MIN_PCT % of the $69,000 graduation cap
-                                (~$38k at 55%). 0 disables the rule.
+  ARENA_PUMPFUN_TRACK_RAMP_MCAP_USD   pumpfun universe: market cap in dollars that promotes a launch on sight,
+                                whatever its volume. Unset (default): the ramp floor, RAMP_MIN_PCT % of the live
+                                graduation_cap_usd(), computed at each poll (~$22k at 45% with SOL ~ $115). Set: a
+                                fixed dollar floor instead; 0 disables the rule.
 
 Force-tracking: LiveMarket.track(mint, source="copy", hold_secs=21600, held=()) adds a token the feeds have not
 found (no network call; safe under the arena lock), prices it on the next refresh and protects it from eviction
@@ -204,11 +213,13 @@ TRACK_MCAP_USD = float(os.environ.get("ARENA_PUMPFUN_TRACK_MCAP_USD", "12000") o
 TRACK_VOL_USD = float(os.environ.get("ARENA_PUMPFUN_TRACK_VOL_USD", "8000") or 0)
 TRACK_MIN_TXNS = 40          # 1h buys + sells a launch needs for the volume rule
 PROBATION_PER_CYCLE = 120    # launches priced per discover cycle (4 DexScreener requests of 30)
-GRADUATION_CAP_USD = 69000   # market cap at which a pump.fun curve completes (for curve_pct)
+# Market cap in SOL at which a pump.fun curve completes (for curve_pct; module docstring, "Graduation cap").
+GRADUATION_CAP_SOL = float(os.environ.get("ARENA_GRADUATION_CAP_SOL", "425") or 425)
+_last_sol_usd = 0.0          # the last live SOL price any market saw (the brief's dollar figure reads it)
 # Run 9b ramp zone (module docstring): curve coins at or above the ramp floor are promoted on sight and kept tracked.
 RAMP_MIN_PCT = _sig.RAMP_MIN_PCT
 _ramp_mcap = os.environ.get("ARENA_PUMPFUN_TRACK_RAMP_MCAP_USD", "").strip()
-TRACK_RAMP_MCAP_USD = float(_ramp_mcap) if _ramp_mcap else RAMP_MIN_PCT / 100 * GRADUATION_CAP_USD
+TRACK_RAMP_MCAP_USD = float(_ramp_mcap) if _ramp_mcap else None  # None: RAMP_MIN_PCT % of the live cap, per poll
 RAMP_PROTECT_SECS = 1800     # eviction protection a ramp-zone curve coin gets, refreshed while it stays there
 CURVE_K_SOL = 30.0 * 1.073e9 / 1e9   # pump.fun bonding curve: 30 virtual SOL x 1.073 billion virtual tokens, per token
 CURVE_VIRTUAL_SOL = 30.0
@@ -316,7 +327,31 @@ def risk_rating(flags, hard=False):
     return "yellow" if len(flags) <= 2 else "red"
 
 
-def _annotate(t):
+def _note_sol_price(sol_usd):
+    """Remember a market's live SOL price (module level, for code without a market at hand, like the brief)."""
+    global _last_sol_usd
+    if sol_usd and sol_usd > 0:
+        _last_sol_usd = float(sol_usd)
+
+
+def live_sol_usd():
+    """The last live SOL price a market saw, or 0.0 before any."""
+    return _last_sol_usd
+
+
+def graduation_cap_usd(sol_usd=None):
+    """The dollar market cap at which a pump.fun curve completes: GRADUATION_CAP_SOL x `sol_usd` (default: the last
+    live SOL price any market saw), falling back to exchange.SOL_USD (ARENA_SOL_USD) when there is no live price."""
+    sol = sol_usd if sol_usd and sol_usd > 0 else _last_sol_usd
+    if not sol or sol <= 0:
+        import exchange  # stdlib-only module, imported late
+        sol = exchange.SOL_USD
+    return GRADUATION_CAP_SOL * sol
+
+
+def _annotate(t, cap_usd=None):
+    """Risk flags, rating, `high` and (curve coins) pump.curve_pct = mcap as a share of `cap_usd`, the graduation
+    cap in dollars (default graduation_cap_usd(); callers pass their market's live cap)."""
     price = t.get("price") or 0
     if price > 0:
         t["high"] = max(t.get("high") or 0, price)  # highest price seen while tracked (dead-launch eviction)
@@ -324,7 +359,8 @@ def _annotate(t):
     if isinstance(pump, dict) and pump.get("graduated"):
         pump["curve_pct"] = 100.0  # the curve completed: never a stale value from the curve days
     elif t.get("dex") == "pumpfun" or t.get("source") == "pumpfun":
-        curve_pct = min(100.0, (t.get("mcap") or 0) / GRADUATION_CAP_USD * 100)  # progress toward graduation
+        cap = cap_usd if cap_usd and cap_usd > 0 else graduation_cap_usd()
+        curve_pct = min(100.0, (t.get("mcap") or 0) / cap * 100)  # market cap as a share of the graduation cap
         t.setdefault("pump", {})["curve_pct"] = round(curve_pct, 1)
     t["flags"] = risk_flags(t)
     t["rating"] = risk_rating(t["flags"], hard=any(h for _, h in _rug_flags(t)))
@@ -614,7 +650,7 @@ class LiveMarket:
         minutes after its launch; each cycle up to PROBATION_PER_CYCLE of them (least recently priced first, then
         oldest) are priced on DexScreener. A launch is promoted when its market cap reaches TRACK_MCAP_USD, or its
         1h volume TRACK_VOL_USD with at least TRACK_MIN_TXNS transactions, or its market cap reaches the ramp zone
-        (TRACK_RAMP_MCAP_USD, whatever the volume); its details go to _pump_meta exactly like the old
+        (RAMP_MIN_PCT % of the live graduation cap, or TRACK_RAMP_MCAP_USD when set; whatever the volume); its details go to _pump_meta exactly like the old
         best-creator-buy rule (plus the curve_pct DexScreener's market cap implies, so a ramp-zone coin is protected
         from eviction on the refresh that adds it), so the new token carries `pump`. Launches that never pass expire."""
         if self.pump is None:
@@ -646,10 +682,12 @@ class LiveMarket:
             self.probation[a]["polled_at"] = now
         self.probation_stats["polled"] += len(batch)
         found = {}
+        cap = self.graduation_cap_usd()
+        ramp_floor = TRACK_RAMP_MCAP_USD if TRACK_RAMP_MCAP_USD is not None else RAMP_MIN_PCT / 100 * cap
         for a, t in self._fetch_pairs(batch).items():
             if a not in self.probation:
                 continue
-            ramp = bool(TRACK_RAMP_MCAP_USD) and t["mcap"] >= TRACK_RAMP_MCAP_USD
+            ramp = bool(ramp_floor) and t["mcap"] >= ramp_floor
             if not (ramp or t["mcap"] >= TRACK_MCAP_USD
                     or (t["vol_h1"] >= TRACK_VOL_USD and t["buys_h1"] + t["sells_h1"] >= TRACK_MIN_TXNS)):
                 continue
@@ -660,7 +698,7 @@ class LiveMarket:
                 "initial_buy_sol": round(e.get("initial_buy_sol") or 0, 3), "creator": e.get("creator"),
                 "curve": e.get("curve"), "symbol": e.get("symbol") or "", "name": e.get("name") or "",
                 "mayhem": bool(e.get("mayhem")),
-                "curve_pct": round(min(100.0, (t["mcap"] or 0) / GRADUATION_CAP_USD * 100), 1),
+                "curve_pct": round(min(100.0, (t["mcap"] or 0) / cap * 100), 1),
             }
             self.pump_stats["launches"] += 1
             self.probation_stats["promoted"] += 1
@@ -1082,6 +1120,10 @@ class LiveMarket:
     def _sol_price(self):
         return (self.sol or {}).get("price") or 0.0
 
+    def graduation_cap_usd(self):
+        """This market's graduation cap in dollars: GRADUATION_CAP_SOL x its live SOL price (fallback: SOL_USD)."""
+        return graduation_cap_usd(self._sol_price())
+
     def quote_buy(self, t, usd):
         """How many tokens `usd` (already net of fees) buys right now according to Jupiter, or None.
         Memecoins are bought with SOL (converted at the DexScreener SOL price); SOL itself with USDC."""
@@ -1117,7 +1159,7 @@ class LiveMarket:
         if t is not None:
             t["sellable"] = res
             if t.get("price"):
-                _annotate(t)
+                _annotate(t, self.graduation_cap_usd())
         c = self.risk_cache.setdefault(addr, {"checked": 0})
         c.update(sell_ok=res["ok"], sell_ratio=res.get("ratio"), sell_checked=res["checked"])
         self.risk_dirty = True
@@ -1173,9 +1215,10 @@ class LiveMarket:
         if not addrs:
             return
         now = time.time()
+        cap = self.graduation_cap_usd()
         for a, t in self._fetch_pairs(addrs).items():
             self._merge_pair(a, t, now)
-            _annotate(t)
+            _annotate(t, cap)
 
     def _check_rug(self, now):
         """Up to RUG_CHECKS rugdata assessments per tick: never-assessed tokens first (least recently tried
@@ -1248,6 +1291,7 @@ class LiveMarket:
             self.sol = best.pop(SOL_MINT)
             self.sol.update(flags=[], rating="green", risk={"mint_revoked": True, "freeze_revoked": True},
                             decimals=9, sellable={"ok": True, "ratio": 1.0, "checked": now})
+            _note_sol_price(self._sol_price())
         for a, t in best.items():
             self._merge_pair(a, t, now)
 
@@ -1287,9 +1331,10 @@ class LiveMarket:
         self._check_sellability(now)
         self._check_rug(now)
 
+        cap = self.graduation_cap_usd()
         for t in list(self.tokens.values()):
             if t.get("price"):
-                _annotate(t)
+                _annotate(t, cap)
 
     def get(self, addr):
         if addr == SOL_MINT:
@@ -1319,6 +1364,7 @@ class MockMarket:
                     "liquidity": 50_000_000, "mcap": 7e10, "flags": [], "rating": "green",
                     "risk": {"mint_revoked": True, "freeze_revoked": True}}
         self._spawned = 0
+        _note_sol_price(self.sol["price"])
         for _ in range(n):
             self._spawn()
 
@@ -1348,17 +1394,22 @@ class MockMarket:
         if kind == "pumpfun":
             curve_pct = rng.uniform(5, 90)
             t["dex"] = "pumpfun"
-            t["mcap"] = curve_pct / 100 * GRADUATION_CAP_USD  # _annotate derives curve_pct from mcap
+            t["mcap"] = curve_pct / 100 * self.graduation_cap_usd()  # _annotate derives curve_pct from mcap
             t["pump"] = {"launched": t["first_seen"] - t["age_min"] * 60, "curve_pct": round(curve_pct, 1)}
         elif kind == "graduated":
             t["dex"] = "pumpswap"
             t["pump"] = {"graduated": t["first_seen"] - t["age_min"] * 60}
-        _annotate(t)
+        _annotate(t, self.graduation_cap_usd())
         self.tokens[a] = t
+
+    def graduation_cap_usd(self):
+        """GRADUATION_CAP_SOL x the mock's SOL price (same contract as LiveMarket.graduation_cap_usd)."""
+        return graduation_cap_usd(self.sol.get("price"))
 
     def refresh(self, held):
         rng = self.rng
         held = set(held)
+        cap = self.graduation_cap_usd()
         for t in list(self.tokens.values()):  # snapshot: track() can run on another thread
             if t.get("_rugged"):
                 continue
@@ -1377,7 +1428,7 @@ class MockMarket:
             t["chg_m5"] = (t["price"] / h[-min(len(h), n5 + 1)] - 1) * 100
             t["chg_h1"] = (t["price"] / h[-min(len(h), n60 + 1)] - 1) * 100
             t["age_min"] += self.tick / 60
-            _annotate(t)
+            _annotate(t, cap)
         if rng.random() < 0.3:
             self._spawn()
         dead = [a for a, t in list(self.tokens.items()) if t.get("_rugged") and a not in held
@@ -1386,6 +1437,7 @@ class MockMarket:
             for a in dead[: len(self.tokens) - 60]:
                 self.tokens.pop(a, None)
         self.sol["price"] *= math.exp(rng.gauss(0, 0.002))
+        _note_sol_price(self.sol["price"])
 
     def get(self, addr):
         return self.sol if addr == SOL_MINT else self.tokens.get(addr)

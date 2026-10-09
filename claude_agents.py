@@ -65,10 +65,13 @@ What the arena does for you:
 - Moonshots, lives, points and the strategy room are described below.
 
 Playbook (what the data means; you decide what to do with it):
-- Ramp: on the run-8 recordings the only entry that paid was buying a curve coin in mid-fill with net buying from
+- Ramp: {CURVE_CAP_TEXT}
+  On the run-8 recordings the only entry that paid was buying a curve coin in mid-fill with net buying from
   many wallets and selling at graduation or a -30% stop; coins that reach half the curve graduate about half the time,
   and the curve's own math lifts the price into graduation. In run 9 the ramp wins were entries at 69% and 46% filled
-  that graduated within two minutes, and every loss was an entry at 40-52% that stalled, so the ramp is now
+  that graduated within two minutes, and every loss was an entry at 40-52% that stalled (those run-8 and run-9
+  percentages, and the replay's, were measured against an old fixed dollar cap and read about 1.4x higher on
+  today's scale), so the ramp is now
   {RAMP_MIN}-{RAMP_MAX}% filled (the replay averaged +46% entering at 60%, +12% at 50%, +7% at 40%). Dip-buys,
   chasing fast fills and buying at first sight all lost after costs. ramp_setup marks coins in that window.
 - Rugs that look strong: last night every brand-name coin (ChatGPT, Apple, NVIDIA, Tesla, Nike...) and every fresh
@@ -196,13 +199,13 @@ UNIVERSE_TEXT_PUMPFUN = """- graduates: pump.fun coins that graduated to PumpSwa
   top 15, plus any coin the watcher woke you for), each with minutes_since_graduation and its "structure".
 - curve: pump.fun coins still on their bonding curve that passed the vetoes (the top 15, plus any coin the watcher woke you for):
   ramp_setup coins first ({RAMP_MIN}-{RAMP_MAX}% filled with net buying; most filled first), then the fastest-filling.
-  curve_pct is how far the curve has filled (0-100); curve_pct_chg_10m is how much it filled in the last 10 minutes
+  curve_pct is the coin's market cap as a share of the graduation cap (0-100; see Ramp above); curve_pct_chg_10m is how much it filled in the last 10 minutes
   (for a coin tracked under 10 minutes, its fill since tracking began scaled to a 10-minute pace; null in its first 2
   minutes).
 - chg_since (on both lists) is the price change from 2, 5, 10, 20 and 30 minutes ago to now, from the arena's own
   30-second price history, and swing_30m its noise level. A coin you hold stays in positions after it leaves both lists.
-- pump.fun: every coin in this arena is a pump.fun coin. A new coin trades on a bonding curve; the curve fills at about
-  $69k market cap and the coin then migrates (graduates) to a PumpSwap pool. curve_pct is its progress toward that.
+- pump.fun: every coin in this arena is a pump.fun coin. A new coin trades on a bonding curve; the curve completes at a
+  fixed market cap of about 425 SOL and the coin then migrates (graduates) to a PumpSwap pool.
   Most graduates lose most of their value within 20 minutes of migrating, and the first minute after a launch or a
   migration is the snipers' exit. Fees: the {FEE_TEXT} on each side, plus the pool fee and price impact."""
 
@@ -277,6 +280,27 @@ def stalkchain_texts():
     return STALKCHAIN_LOOK_TEXT, STALKCHAIN_PLAYBOOK_TEXT
 
 
+def _ride_left_pct(pct):
+    """Price left to graduation, in %, for a coin at `pct` of the graduation market cap (price scales with market cap):
+    100/pct - 1, rounded to the nearest 10 above +100%."""
+    ride = (100.0 / pct - 1) * 100
+    return f"{round(ride, -1):.0f}" if ride >= 100 else f"{ride:.0f}"
+
+
+def curve_cap_text(cap_usd=None):
+    """The brief's curve_pct sentence. The dollar figure is the live graduation cap (market.graduation_cap_usd() at
+    the last SOL price a market saw, rounded to $1,000 so the brief, and the prompt cache, change only when SOL
+    moves ~2%); before any SOL price exists it says "about $47k"."""
+    if cap_usd is None and market.live_sol_usd() > 0:
+        cap_usd = market.graduation_cap_usd()
+    money = f"roughly ${round(cap_usd, -3):,.0f}" if cap_usd else "about $47k"
+    lo, hi = sig.RAMP_MIN_PCT, sig.RAMP_MAX_PCT
+    ride = (f"from {lo:g}% a coin that graduates has about +{_ride_left_pct(lo)}% of price left to migration, "
+            f"from {hi:g}% about +{_ride_left_pct(hi)}%, before your costs") if 0 < lo < hi <= 100 else "before your costs"
+    return (f"curve_pct is the coin's market cap as a share of the graduation cap (about {market.GRADUATION_CAP_SOL:g} "
+            f"SOL, {money} at the current SOL price); {ride}.")
+
+
 def fill_brief(text, min_check, max_check):
     """Fill the brief's placeholders: look interval, journal size, fees and costs, lives and the bust line."""
     import arena as _ar  # the moonshot and runner settings live with the rules that enforce them
@@ -289,6 +313,7 @@ def fill_brief(text, min_check, max_check):
     sc_look, sc_play = stalkchain_texts()
     text = text.replace("{STALKCHAIN_LOOK_TEXT}", sc_look).replace("{STALKCHAIN_PLAYBOOK_TEXT}", sc_play)
     text = text.replace("{RAMP_MIN}", f"{sig.RAMP_MIN_PCT:g}").replace("{RAMP_MAX}", f"{sig.RAMP_MAX_PCT:g}")
+    text = text.replace("{CURVE_CAP_TEXT}", curve_cap_text())
     lives = max(1, int(os.environ.get("ARENA_LIVES", "3") or 3))
     bust = float(os.environ.get("ARENA_BUST_PCT", "10") or 10)
     text = text.replace("{REGEN_TEXT}", regen_brief_text(lives))
@@ -324,7 +349,7 @@ PERSONAS = {
     "ramp": ("Ramp", "Your style: ramp trader. You buy bonding-curve coins while their fill is {RAMP_MIN}-{RAMP_MAX}% (ramp_setup) with net "
                      "buying from many wallets and no bundle tells, and you cash out at graduation: put \"sell_at_graduation\": true on the "
                      "buy so the arena sells the moment the coin migrates. Stop -30%. Prefer the most-filled setup on screen; an "
-                     "entry that is still 55-65% filled needs to keep filling, so stop at -30% and move on if it stalls. "
+                     "entry that is still 45-55% filled needs to keep filling, so stop at -30% and move on if it stalls. "
                      "You skip coins already past {RAMP_MAX}%, coins with a "
                      "straight-green-run chart, and anything the vetoes flag. Several ramps a day beat one home run."),
     "skeptic": ("Skeptic", "Your style: skeptic. You trade graduates only, never the bonding curve. You assume every coin is a rug until its "
@@ -558,6 +583,7 @@ class LLMAgent(Agent):
             self.team = "copy"
         self.min_check, self.max_check = min_check, max(max_check, min_check)
         self.system = fill_brief(self.system, min_check, self.max_check)
+        self._cap_text = curve_cap_text()  # the live-dollar curve_pct sentence in the brief (see _refresh_cap_text)
         self.watch = dict(DEFAULT_WATCH) if DEFAULT_WATCH else None  # what the market watcher wakes this agent for
         self.watch_seen = {}              # token -> when the watcher last woke us about it
         self.journal = None               # lessons Claude keeps between looks; loaded from the db on first use
@@ -692,11 +718,24 @@ class LLMAgent(Agent):
             wait_until = max(wait_until, self.last_started + self.control.slow_minutes * 60)
         return now >= wait_until
 
+    def _refresh_cap_text(self):
+        """Keep the brief's graduation-cap dollar figure live: the brief is filled before the market's first SOL
+        price, so swap in the current sentence whenever it changes (rounded to $1,000, so rarely)."""
+        old, new = getattr(self, "_cap_text", None), curve_cap_text()
+        if not old or new == old:
+            return
+        for attr in ("system", "analyst_system"):
+            text = getattr(self, attr, None)
+            if isinstance(text, str):
+                setattr(self, attr, text.replace(old, new))
+        self._cap_text = new
+
     def decide(self, v):
         if self.ready is not None:
             (orders, record), self.ready = self.ready, None
             self.log.append(record)  # saved after the arena has checked the orders
             return orders
+        self._refresh_cap_text()  # before the thinking thread starts reading self.system
         self.thinking_since = self.last_started = time.time()
         state, self.woke, self.wake_reason = self._state(v), self.wake_reason, None
         self.wake_tokens = set()

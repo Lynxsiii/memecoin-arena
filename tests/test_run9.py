@@ -37,13 +37,13 @@ def test_ramp_setup_true_in_window():
 
 
 def test_ramp_stages_and_bounds():
-    # run 9b window: 55-85% (signals.RAMP_MIN_PCT / RAMP_MAX_PCT)
-    assert _view(_curve(50.0), _flow())["ramp"] == "early"
-    assert _view(_curve(86.0), _flow())["ramp"] == "late"
-    for pct in (30.0, 50.0, 54.9, 86.0):
+    # 2026-10-09 window: 45-75% of the true (~425 SOL) graduation cap (signals.RAMP_MIN_PCT / RAMP_MAX_PCT)
+    assert _view(_curve(40.0), _flow())["ramp"] == "early"
+    assert _view(_curve(76.0), _flow())["ramp"] == "late"
+    for pct in (30.0, 40.0, 44.9, 76.0):
         assert "ramp_setup" not in _view(_curve(pct), _flow())
-    assert _view(_curve(55.0), _flow())["ramp_setup"] is True
-    assert _view(_curve(85.0), _flow())["ramp_setup"] is True
+    assert _view(_curve(45.0), _flow())["ramp_setup"] is True
+    assert _view(_curve(75.0), _flow())["ramp_setup"] is True
 
 
 def test_ramp_setup_false_cases():
@@ -396,6 +396,6 @@ def test_run9_brief(monkeypatch):
     monkeypatch.setattr(market, "UNIVERSE", "pumpfun")
     b = fill_brief(LLM_SYSTEM, 1, 60)
     assert "ramp_setup" in b and "hard -30% stop" in b and "(moonshots -50%)" in b
-    assert b.index("- Ramp: on the run-8 recordings") < b.index("- Rugs that look strong")
+    assert b.index("- Ramp: curve_pct is the coin's market cap as a share of the graduation cap") < b.index("- Rugs that look strong")
     assert '"sell_at_graduation": true' in b and "Never average down" in b
     assert "{" + "HARD_STOP_TEXT}" not in b

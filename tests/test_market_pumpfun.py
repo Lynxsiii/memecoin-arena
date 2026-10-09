@@ -113,10 +113,12 @@ def test_probation_poll_caps_requests(monkeypatch):
 
 def test_curve_pct_annotated():
     from market import _annotate
-    t = {"price": 1e-6, "liquidity": 5000, "mcap": 34500, "source": "pumpfun", "dex": "pumpfun",
+    t = {"price": 1e-6, "liquidity": 5000, "mcap": 25_000, "source": "pumpfun", "dex": "pumpfun",
          "pump": {"launched": 1}}
-    _annotate(t)
+    _annotate(t, cap_usd=50_000)
     assert t["pump"]["curve_pct"] == 50.0
+    _annotate(t, cap_usd=20_000)
+    assert t["pump"]["curve_pct"] == 100.0  # capped at 100
     assert t["high"] == 1e-6
     g = {"price": 2e-6, "mcap": 30000, "source": "graduated", "dex": "pumpswap",
          "pump": {"launched": 1, "graduated": 2, "curve_pct": 43.5}}

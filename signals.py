@@ -113,8 +113,8 @@ Vetoes (Tier 0-1 hard rejects with the data this arena has; thresholds below, al
   transaction), far more RPC than the free tier allows at 4 rug checks a tick.
 
 Settings: every number in THRESHOLDS can be overridden with ARENA_VETO_<KEY> (e.g. ARENA_VETO_TOP1_PCT=25,
-ARENA_VETO_BUNDLE_SOL_MAX=0.25, ARENA_VETO_BUNDLE_SOL_SPREAD=0.05); the ramp window is ARENA_RAMP_MIN=55 and
-ARENA_RAMP_MAX=85 (these win over ARENA_VETO_RAMP_MIN_PCT / _MAX_PCT; exported as RAMP_MIN_PCT / RAMP_MAX_PCT);
+ARENA_VETO_BUNDLE_SOL_MAX=0.25, ARENA_VETO_BUNDLE_SOL_SPREAD=0.05); the ramp window is ARENA_RAMP_MIN=45 and
+ARENA_RAMP_MAX=75 (curve_pct, the market cap as a share of the ~425 SOL graduation cap; these win over ARENA_VETO_RAMP_MIN_PCT / _MAX_PCT; exported as RAMP_MIN_PCT / RAMP_MAX_PCT);
 ARENA_VETO_IGNORE_HOLDERS is a comma-separated wallet list replacing the default; ARENA_VETO_BRAND_EXTRA is a
 comma-separated list of names added to BRAND_NAMES.
 """
@@ -191,9 +191,12 @@ _DEFAULTS = {
     # -30% was the only positive entry rule). Run 9b (2026-10-09): the window moved to 55-85% (run 9's wins were
     # entries at 69% and 46% that graduated within two minutes, every loser an entry at 40-52% that stalled; the
     # replay averaged +46% entering at 60%, +12% at 50%, +7% at 40%). ARENA_RAMP_MIN / ARENA_RAMP_MAX override the
-    # window (read below). The window, and the net buying a ramp_setup needs.
-    "ramp_min_pct": 55.0,
-    "ramp_max_pct": 85.0,
+    # window (read below). 2026-10-09: those percentages were mcap / a fixed $69k cap; graduation is ~425 SOL of
+    # market cap (~$49k at SOL ~ $115), so they sat about 1.4x too low. The window is now 45-75% of the true cap:
+    # price scales with (30 + deposited SOL)^2, so a coin that graduates has about +120% left from 45% and +33%
+    # from 75%. The window, and the net buying a ramp_setup needs.
+    "ramp_min_pct": 45.0,
+    "ramp_max_pct": 75.0,
     "ramp_min_net_share": 0.1,
     "ramp_min_buyers": 10.0,
     # Chart tell (run 9, video 1): a straight green run from the first tracked point, at least chart_min_points
