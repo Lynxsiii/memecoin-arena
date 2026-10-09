@@ -55,7 +55,7 @@ What the arena does for you:
   net_inflow_1h_usd, net_share (net buying as a share of all volume, -1 to 1), buyers_1h, round_trip_share (volume from
   wallets buying and selling within a minute: churn), top_buyer_share, flow_quality, insider_pct, top10_pct,
   creator_pct, creator_sold_usd, lp_locked_pct, minutes_since_graduation, liquidity_vs_1h_pct and flags; on a curve coin
-  also curve_pct, curve_pct_chg_10m, ramp ("early" under 40% filled, "ramp" 40-80%, "late" past 80%) and ramp_setup
+  also curve_pct, curve_pct_chg_10m, ramp ("early" under {RAMP_MIN}% filled, "ramp" {RAMP_MIN}-{RAMP_MAX}%, "late" past {RAMP_MAX}%) and ramp_setup
   (true: in the ramp with net buying from many wallets, no veto, no straight-run chart); chart_tell "straight run" when
   the price went up in one straight green run since tracking began (a bundle pattern, shown as a flag). Read them as a
   whole; none is a rule on its own.
@@ -64,9 +64,11 @@ What the arena does for you:
 - Moonshots, lives, points and the strategy room are described below.
 
 Playbook (what the data means; you decide what to do with it):
-- Ramp: on the run-8 recordings the only entry that paid was buying a curve coin as its
-  fill crossed 40-80% with net buying from many wallets and selling at graduation or a -30% stop; coins that reach
-  half the curve graduate about half the time, and the curve's own math lifts the price into graduation. Dip-buys,
+- Ramp: on the run-8 recordings the only entry that paid was buying a curve coin in mid-fill with net buying from
+  many wallets and selling at graduation or a -30% stop; coins that reach half the curve graduate about half the time,
+  and the curve's own math lifts the price into graduation. In run 9 the ramp wins were entries at 69% and 46% filled
+  that graduated within two minutes, and every loss was an entry at 40-52% that stalled, so the ramp is now
+  {RAMP_MIN}-{RAMP_MAX}% filled (the replay averaged +46% entering at 60%, +12% at 50%, +7% at 40%). Dip-buys,
   chasing fast fills and buying at first sight all lost after costs. ramp_setup marks coins in that window.
 - Rugs that look strong: last night every brand-name coin (ChatGPT, Apple, NVIDIA, Tesla, Nike...) and every fresh
   graduate carrying $80k+ of liquidity died within an hour; a real migration brings about $12k, so a huge pool minutes
@@ -164,7 +166,7 @@ What each look shows you:
 
 Rules:
 - {SIZE_RULE} At most 8 open positions.
-{HARD_STOP_TEXT}{BUY_RATION_TEXT}- Orders fill shortly after you answer (usually within a minute), at whatever the price is then.
+{HARD_STOP_TEXT}{BUY_RATION_TEXT}{GRAD_CAP_TEXT}- Orders fill shortly after you answer (usually within a minute), at whatever the price is then.
 - next_check_min is when you want to look again, from {MIN_CHECK} to {MAX_CHECK} minutes;
   look every minute if the market calls for it. Between looks only your exits, the exit ladder, your alarms and the
   watcher act for you.
@@ -192,7 +194,7 @@ UNIVERSE_TEXT_ALL = """- candidates: the busiest tokens that passed the vetoes, 
 UNIVERSE_TEXT_PUMPFUN = """- graduates: pump.fun coins that graduated to PumpSwap in the last 6 hours and passed the vetoes, newest first (the
   top 15, plus any coin the watcher woke you for), each with minutes_since_graduation and its "structure".
 - curve: pump.fun coins still on their bonding curve that passed the vetoes (the top 15, plus any coin the watcher woke you for):
-  ramp_setup coins first (most filled first), then the fastest-filling.
+  ramp_setup coins first ({RAMP_MIN}-{RAMP_MAX}% filled with net buying; most filled first), then the fastest-filling.
   curve_pct is how far the curve has filled (0-100); curve_pct_chg_10m is how much it filled in the last 10 minutes
   (for a coin tracked under 10 minutes, its fill since tracking began scaled to a 10-minute pace; null in its first 2
   minutes).
@@ -246,6 +248,15 @@ def hard_stop_text(ar):
             f"one, never a looser one. Never average down: a coin under your entry is a coin to leave.\n")
 
 
+def graduate_cap_text(ar):
+    """The Rules line for the graduate buy cap (arena.LLM_GRADUATE_MAX_USD); empty when it is off."""
+    if not ar.LLM_GRADUATE_MAX_USD:
+        return ""
+    cap = f"${ar.LLM_GRADUATE_MAX_USD:g}"
+    return (f"- Buys on graduated coins are capped at {cap} each (graduates were 38 buys for -$809 yesterday; the curve\n"
+            f"  was 22 buys for +$506). Curve buys are not capped.\n")
+
+
 def fill_brief(text, min_check, max_check):
     """Fill the brief's placeholders: look interval, journal size, fees and costs, lives and the bust line."""
     import arena as _ar  # the moonshot and runner settings live with the rules that enforce them
@@ -254,6 +265,8 @@ def fill_brief(text, min_check, max_check):
     text = text.replace("{SOURCE_TEXT}", SOURCE_TEXT_PUMPFUN if market.UNIVERSE == "pumpfun" else SOURCE_TEXT_ALL)
     text = text.replace("{BUY_RATION_TEXT}", buy_ration_text(_ar))
     text = text.replace("{HARD_STOP_TEXT}", hard_stop_text(_ar))
+    text = text.replace("{GRAD_CAP_TEXT}", graduate_cap_text(_ar))
+    text = text.replace("{RAMP_MIN}", f"{sig.RAMP_MIN_PCT:g}").replace("{RAMP_MAX}", f"{sig.RAMP_MAX_PCT:g}")
     lives = max(1, int(os.environ.get("ARENA_LIVES", "3") or 3))
     bust = float(os.environ.get("ARENA_BUST_PCT", "10") or 10)
     text = text.replace("{REGEN_TEXT}", regen_brief_text(lives))
@@ -286,9 +299,11 @@ PERSONAS = {
                    "profits. Don't flag these as moonshots; that caps the size. Each life is a lottery ticket on one coin; "
                    "when it busts you pick the next. "
                    "You do not wait for an hour-old calm coin; that is not your style. On any look where you hold nothing, buy the best ramp_setup or fresh graduate with net buying, size it to the pool, set a stop, and move on. Most of these lose; the one that runs is the point."),
-    "ramp": ("Ramp", "Your style: ramp trader. You buy bonding-curve coins while their fill crosses 40-60% (ramp_setup) with net "
+    "ramp": ("Ramp", "Your style: ramp trader. You buy bonding-curve coins while their fill is {RAMP_MIN}-{RAMP_MAX}% (ramp_setup) with net "
                      "buying from many wallets and no bundle tells, and you cash out at graduation: put \"sell_at_graduation\": true on the "
-                     "buy so the arena sells the moment the coin migrates. Stop -30%. You skip coins already past 80%, coins with a "
+                     "buy so the arena sells the moment the coin migrates. Stop -30%. Prefer the most-filled setup on screen; an "
+                     "entry that is still 55-65% filled needs to keep filling, so stop at -30% and move on if it stalls. "
+                     "You skip coins already past {RAMP_MAX}%, coins with a "
                      "straight-green-run chart, and anything the vetoes flag. Several ramps a day beat one home run."),
     "skeptic": ("Skeptic", "Your style: skeptic. You trade graduates only, never the bonding curve. You assume every coin is a rug until its "
                            "holders, LP lock and flow prove otherwise: no concentrated holders, liquidity that is deep and "
@@ -317,7 +332,7 @@ PERSONAS = {
     "runner": ("Runner", "Your style: runner hunter. Memecoin profits come from the few coins that run many times over, so you hunt "
                          "the curve lane: bonding-curve coins whose curve_pct is accelerating (see curve_pct_chg_10m) on net "
                          "money from many distinct wallets, with little churn and a clean holder structure. You size each bet "
-                         "to your conviction and accept that most lose. You never buy past 80% of the curve and skip coins "
+                         "to your conviction and accept that most lose. You never buy past {RAMP_MAX}% of the curve and skip coins "
                          "that are already fading; a coin still building after a big move is fair game. Use your moonshot slots, let winners run with the ladder, and cut losers quickly."),
     "shadow": ("Shadow", "Your style: shadow trader. your_leaders lists the top wallets the arena picked for you: "
                          "profitable over the last two days, many different tokens, not bots or sub-minute flippers, "

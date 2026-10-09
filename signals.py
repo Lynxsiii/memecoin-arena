@@ -110,7 +110,8 @@ Vetoes (Tier 0-1 hard rejects with the data this arena has; thresholds below, al
   transaction), far more RPC than the free tier allows at 4 rug checks a tick.
 
 Settings: every number in THRESHOLDS can be overridden with ARENA_VETO_<KEY> (e.g. ARENA_VETO_TOP1_PCT=25,
-ARENA_VETO_BUNDLE_SOL_MAX=0.25, ARENA_VETO_BUNDLE_SOL_SPREAD=0.05, ARENA_VETO_RAMP_MIN_PCT=40);
+ARENA_VETO_BUNDLE_SOL_MAX=0.25, ARENA_VETO_BUNDLE_SOL_SPREAD=0.05); the ramp window is ARENA_RAMP_MIN=55 and
+ARENA_RAMP_MAX=85 (these win over ARENA_VETO_RAMP_MIN_PCT / _MAX_PCT; exported as RAMP_MIN_PCT / RAMP_MAX_PCT);
 ARENA_VETO_IGNORE_HOLDERS is a comma-separated wallet list replacing the default; ARENA_VETO_BRAND_EXTRA is a
 comma-separated list of names added to BRAND_NAMES.
 """
@@ -184,9 +185,12 @@ _DEFAULTS = {
     "bundle_sol_match": 4.0,
     "bundle_sol_flag": 3.0,
     # Ramp (run 9 replay of 798 run-8 curve coins: buying as the fill crossed 40-60% and selling at graduation or
-    # -30% was the only positive entry rule). The window, and the net buying a ramp_setup needs.
-    "ramp_min_pct": 40.0,
-    "ramp_max_pct": 80.0,
+    # -30% was the only positive entry rule). Run 9b (2026-10-09): the window moved to 55-85% (run 9's wins were
+    # entries at 69% and 46% that graduated within two minutes, every loser an entry at 40-52% that stalled; the
+    # replay averaged +46% entering at 60%, +12% at 50%, +7% at 40%). ARENA_RAMP_MIN / ARENA_RAMP_MAX override the
+    # window (read below). The window, and the net buying a ramp_setup needs.
+    "ramp_min_pct": 55.0,
+    "ramp_max_pct": 85.0,
     "ramp_min_net_share": 0.1,
     "ramp_min_buyers": 10.0,
     # Chart tell (run 9, video 1): a straight green run from the first tracked point, at least chart_min_points
@@ -206,6 +210,10 @@ def _env_f(name, default):
 
 
 THRESHOLDS = {k: _env_f("ARENA_VETO_" + k.upper(), v) for k, v in _DEFAULTS.items()}
+# The ramp window (run 9b): ARENA_RAMP_MIN / ARENA_RAMP_MAX, read once at import (the brief and market.py follow them).
+THRESHOLDS["ramp_min_pct"] = _env_f("ARENA_RAMP_MIN", THRESHOLDS["ramp_min_pct"])
+THRESHOLDS["ramp_max_pct"] = _env_f("ARENA_RAMP_MAX", THRESHOLDS["ramp_max_pct"])
+RAMP_MIN_PCT, RAMP_MAX_PCT = THRESHOLDS["ramp_min_pct"], THRESHOLDS["ramp_max_pct"]
 # Wallets that hold supply by protocol design, left out of top1 / top10 (reported as a flag instead).
 _DEFAULT_IGNORE = {
     # pump.fun Mayhem-mode agent: holds ~50% (46-75%) of every Mayhem launch seen in the arena's RugCheck data

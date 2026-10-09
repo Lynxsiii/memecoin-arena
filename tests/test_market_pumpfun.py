@@ -63,8 +63,8 @@ def test_pumpfun_mode_skips_other_feeds(monkeypatch):
     m._discover_dexscreener = lambda: (_ for _ in ()).throw(AssertionError("called"))
     m._discover_gecko = lambda: (_ for _ in ()).throw(AssertionError("called"))
     assert m._discover() == {}  # feed empty, nothing else consulted
-    assert m.max_tracked == 150
-    assert m.quota() == {"pumpfun": 150, "organic": 0, "promoted": 0}
+    assert m.max_tracked == 500  # run 9b (was 150)
+    assert m.quota() == {"pumpfun": 500, "organic": 0, "promoted": 0}
 
 
 def test_probation_promotes_on_mcap(monkeypatch):
@@ -89,7 +89,7 @@ def test_probation_promotes_on_volume(monkeypatch):
 
 def test_probation_ignores_quiet_and_old(monkeypatch):
     c, d = _mint("C3pump"), _mint("D4pump")
-    old = _launch(c, mcap_sol=31, ts=_NOW - 25 * 60)
+    old = _launch(c, mcap_sol=31, ts=_NOW - (market.PROBATION_MIN + 5) * 60)
     quiet = _launch(d, mcap_sol=31)
     m = _market(monkeypatch, universe="pumpfun", launches=[old, quiet],
                 pairs={d: _pair(d, mcap=3000, vol_h1=500, txns=10)})

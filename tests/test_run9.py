@@ -30,39 +30,40 @@ def _view(t, flow=None, **kw):
 
 # ------------------------------------------------------------------ 1. ramp signal and lane
 def test_ramp_setup_true_in_window():
-    s = _view(_curve(50.0), _flow(), chg={"curve_pct_10m": 42.0, "curve_pct_10m_secs": 600})
-    assert s["curve_pct"] == 50.0 and s["curve_pct_chg_10m"] == 8.0
+    s = _view(_curve(60.0), _flow(), chg={"curve_pct_10m": 52.0, "curve_pct_10m_secs": 600})
+    assert s["curve_pct"] == 60.0 and s["curve_pct_chg_10m"] == 8.0
     assert s["ramp"] == "ramp" and s["ramp_setup"] is True
     assert "vetoes" not in s
 
 
 def test_ramp_stages_and_bounds():
-    assert _view(_curve(30.0), _flow())["ramp"] == "early"
-    assert _view(_curve(85.0), _flow())["ramp"] == "late"
-    for pct in (30.0, 85.0):
+    # run 9b window: 55-85% (signals.RAMP_MIN_PCT / RAMP_MAX_PCT)
+    assert _view(_curve(50.0), _flow())["ramp"] == "early"
+    assert _view(_curve(86.0), _flow())["ramp"] == "late"
+    for pct in (30.0, 50.0, 54.9, 86.0):
         assert "ramp_setup" not in _view(_curve(pct), _flow())
-    assert _view(_curve(40.0), _flow())["ramp_setup"] is True
-    assert _view(_curve(80.0), _flow())["ramp_setup"] is True
+    assert _view(_curve(55.0), _flow())["ramp_setup"] is True
+    assert _view(_curve(85.0), _flow())["ramp_setup"] is True
 
 
 def test_ramp_setup_false_cases():
-    assert "ramp_setup" not in _view(_curve(50.0), _flow(net_share=0.05))     # no net buying
-    assert "ramp_setup" not in _view(_curve(50.0), _flow(buyers=5))           # too few wallets
-    vetoed = _view(_curve(50.0, symbol="CHATGPT", name="ChatGPT"), _flow())  # brand veto
+    assert "ramp_setup" not in _view(_curve(60.0), _flow(net_share=0.05))     # no net buying
+    assert "ramp_setup" not in _view(_curve(60.0), _flow(buyers=5))           # too few wallets
+    vetoed = _view(_curve(60.0, symbol="CHATGPT", name="ChatGPT"), _flow())  # brand veto
     assert vetoed.get("vetoes") and "ramp_setup" not in vetoed
-    grad = _view(_curve(50.0, dex="pumpswap", source="graduated", pump={"graduated": _NOW - 600}), _flow())
+    grad = _view(_curve(60.0, dex="pumpswap", source="graduated", pump={"graduated": _NOW - 600}), _flow())
     assert "ramp" not in grad and "ramp_setup" not in grad and "curve_pct" not in grad
 
 
 def test_ramp_setup_without_flow_uses_tx_counts():
-    assert _view(_curve(50.0, buys_h1=40, sells_h1=20))["ramp_setup"] is True
-    assert "ramp_setup" not in _view(_curve(50.0, buys_h1=20, sells_h1=40))
-    assert "ramp_setup" not in _view(_curve(50.0, buys_h1=6, sells_h1=2))   # under 10 buys
+    assert _view(_curve(60.0, buys_h1=40, sells_h1=20))["ramp_setup"] is True
+    assert "ramp_setup" not in _view(_curve(60.0, buys_h1=20, sells_h1=40))
+    assert "ramp_setup" not in _view(_curve(60.0, buys_h1=6, sells_h1=2))   # under 10 buys
 
 
 def test_ramp_setup_excludes_chart_tell():
     pts = [(_NOW - 30 * (9 - i), 1.0 + 0.15 * i) for i in range(10)]  # 1.0 -> 2.35, never down
-    s = _view(_curve(50.0), _flow(), prices=pts)
+    s = _view(_curve(60.0), _flow(), prices=pts)
     assert s["chart_tell"] == "straight run" and "ramp_setup" not in s
     assert s["flags"][0] == _CHART_FLAG
 

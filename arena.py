@@ -20,6 +20,13 @@ Settings (environment variables, read when the Arena is built):
                             this many buys in a rolling 24 hours, none smaller than the minimum, this many minutes between
                             buys (0 turns a rule off; since run 8b only the $50 minimum is on). A refused buy is listed in
                             acct["recent_failures"] with the reason.
+  ARENA_LLM_GRADUATE_MAX_USD=100   run 9b: a Claude's buy of a graduated coin (pump.graduated set or dex "pumpswap")
+                            is clamped to this many dollars (after the veto and churn checks, before the cash clamp);
+                            the order keeps "capped_to" and a "[capped at $N: graduate]" reason note. Not a refusal.
+                            Curve buys (moonshots included) are not capped. 0 disables. Run 9 evidence: graduates were
+                            38 Claude buys for -$809, the curve 22 buys for +$506.
+  Slow ticks: step() prints "[arena] slow tick: Ns (tracked n)" when one full tick takes over SLOW_TICK_SECS=20 s of
+                            wall time, at most once every SLOW_TICK_EVERY_SECS=300 s.
 Execution friction (failed transactions, MEV slippage, fees) is configured in exchange.py; Jupiter quotes in
 market.py. A failed transaction trades nothing, costs the network fee, is counted in acct["failed"] and
 listed in acct["recent_failures"], which view() passes to agents as "recent_failures".
@@ -100,7 +107,17 @@ HARD_STOP_PCT = -abs(float(os.environ.get("ARENA_HARD_STOP_PCT", "-30") or 0))
 MAX_BUYS_PER_DAY = max(0, int(os.environ.get("ARENA_LLM_MAX_BUYS_PER_DAY", "0") or 0))
 MIN_BUY_USD = max(0.0, float(os.environ.get("ARENA_LLM_MIN_BUY_USD", "50") or 0))
 BUY_COOLDOWN_MIN = max(0.0, float(os.environ.get("ARENA_LLM_BUY_COOLDOWN_MIN", "0") or 0))
+# Run 9b graduate buy cap (module docstring): a Claude's buy of a graduated coin is clamped to this many dollars; 0 = off.
+LLM_GRADUATE_MAX_USD = max(0.0, float(os.environ.get("ARENA_LLM_GRADUATE_MAX_USD", "100") or 0))
+SLOW_TICK_SECS = 20.0         # a full tick slower than this (wall time) is printed ...
+SLOW_TICK_EVERY_SECS = 300.0  # ... at most this often
 SHADOW_LEADERS = int(os.environ.get("ARENA_SHADOW_LEADERS", "10") or 10)  # wallets in a shadow trader's leader set
+
+
+def is_graduate(t):
+    """True for a pump.fun coin that left its bonding curve: pump.graduated set or priced on PumpSwap."""
+    t = t or {}
+    return bool((t.get("pump") or {}).get("graduated")) or str(t.get("dex") or "").lower() == "pumpswap"
 
 
 def _rank_rule():
@@ -938,6 +955,12 @@ class Arena:
                 o["moonshot"] = True
             else:
                 o.pop("moonshot", None)
+            o.pop("capped_to", None)
+            if (agent.kind == "llm" and LLM_GRADUATE_MAX_USD and usd > LLM_GRADUATE_MAX_USD
+                    and is_graduate(self.market.get(o["token"]))):
+                usd = LLM_GRADUATE_MAX_USD  # run 9b: graduates lost money, the curve made it (module docstring)
+                o["capped_to"] = LLM_GRADUATE_MAX_USD
+                o["reason"] = f"{o['reason']} [capped at ${LLM_GRADUATE_MAX_USD:g}: graduate]"[:300]
             usd = min(usd, agent.max_trade_frac * view["equity"], view["cash"])
             if usd < 5 or not self.market.get(o["token"]):
                 return None
@@ -1317,6 +1340,23 @@ class Arena:
 
     # ---------- main loop ----------
     def step(self):
+        t0 = time.monotonic()
+        try:
+            self._step()
+        finally:
+            self._note_tick_time(time.monotonic() - t0)
+
+    def _note_tick_time(self, secs):
+        """Print a slow full tick (wall time over SLOW_TICK_SECS), at most once every SLOW_TICK_EVERY_SECS."""
+        if secs <= SLOW_TICK_SECS:
+            return
+        wall = time.time()
+        if wall - getattr(self, "_slow_tick_said", 0.0) < SLOW_TICK_EVERY_SECS:
+            return
+        self._slow_tick_said = wall
+        print(f"[arena] slow tick: {secs:.1f}s (tracked {len(getattr(self.market, 'tokens', None) or ())})")
+
+    def _step(self):
         now = self.clock()
         with self.lock:
             self.market.refresh(self.held())
