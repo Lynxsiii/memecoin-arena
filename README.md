@@ -21,6 +21,10 @@ Useful options:
 | `python main.py --cash 500` | Different starting balance per agent |
 | `python main.py --port 8080` | Use a different port |
 
+### Running unattended
+
+Double-click `start_arena.cmd`. It runs `run_arena.py`, a watchdog that restarts the arena 15 seconds after any crash and logs to `logs/arena-DATE.log`. **Ctrl+C in its window does nothing** (it prints a reminder), so a stray keypress can no longer take the arena down. To stop it, create a file called `stop.flag` in the project folder; the watchdog stops the arena and exits. Delete `stop.flag` before the next start, otherwise the launcher exits immediately. Arguments such as `--reset-money --keep-journals` apply to the first start only. `START_NEW_RUN_resets_money.cmd` uses this.
+
 ## Team Claude (optional)
 
 Five Sonnet 5.5 competitors run through Claude Code using your Claude Pro or Max login (four on Team Claude, plus Sonnet Shadow on Team Copy). You don't need an API key.
